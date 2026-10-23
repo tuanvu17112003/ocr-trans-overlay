@@ -110,9 +110,13 @@ Run the harness yourself:
 - Region rectangles are stored as fractions of the monitor, so they survive resolution
   changes; a >2% aspect change is reported by `remap()`.
 - Multi-monitor capture uses the union rectangle of the selected regions.
-- Translated text is sized from the source line height and never painted outside the
-  source box: long Vietnamese shrinks to the font floor, then ends with an ellipsis
-  (logged) instead of covering neighbouring text.
+- The overlay covers the whole OCR block with an opaque background and draws the
+  Vietnamese inside it: the English source is never visible, and a block stays hidden
+  until its translation for the current text has arrived (no mismatched pairs).
+- Text is sized from the source line height and never painted outside the block: long
+  Vietnamese shrinks to the font floor, then ends with an ellipsis (logged) instead of
+  covering neighbouring text.
+- Paragraphs are merged up to 6 lines; two labels on the same row stay separate blocks.
 - NLLB-600M still mistranslates short game labels out of context. Paragraph grouping
   helps; it is not a substitute for a glossary or a stronger model.
 - The overlay only paints blocks that stay stable for 2-3 OCR passes, so a typewriter
