@@ -45,10 +45,17 @@ class DxgiBackend:
 
     def grab(self, rect: Rect) -> np.ndarray | None:
         session = self._ensure()
-        frame = session.acquire_frame(timeout_ms=33)
-        if frame is None:
+        img = None
+        # The first frames after session creation are often black; retry briefly.
+        for _ in range(4):
+            frame = session.acquire_frame(timeout_ms=16)
+            if frame is None:
+                continue
+            img = frame.to_bgr()
+            if float(img[::16, ::16].mean()) >= 2.0:
+                break
+        if img is None:
             return None
-        img = frame.to_bgr()
         return img[rect.y : rect.bottom, rect.x : rect.right]
 
     def recreate(self) -> None:
@@ -79,7 +86,7 @@ class WgcBackend:
         @self._capture.event
         def on_frame_arrived(frame, control) -> None:
             with self._lock:
-                self._latest = frame.convert_to_bgr().copy()
+                self._latest = frame.convert_to_bgr().frame_buffer.copy()
 
         @self._capture.event
         def on_closed() -> None:
