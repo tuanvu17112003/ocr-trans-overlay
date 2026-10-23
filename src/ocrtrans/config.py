@@ -24,7 +24,6 @@ class Config:
     font_family: str = "Segoe UI"
     text_color: str = "#FFFFFF"
     bg_color: str = "#101014"
-    max_growth: float = 1.8
     min_confidence: float = 0.6
     ocr_downscale: int = 1280
     keys: dict[str, str] = field(default_factory=dict)

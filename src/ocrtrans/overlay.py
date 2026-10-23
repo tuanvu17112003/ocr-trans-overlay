@@ -154,7 +154,7 @@ class OverlayWindow(QWidget):
             item.rect,
             self.screen_rect,
             self.measure,
-            max_growth=self.config.max_growth,
+            line_px=item.line_px,
             min_font_px=self.config.min_font_px,
             obstacles=obstacles,
         )

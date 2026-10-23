@@ -43,6 +43,7 @@ class BlockView:
     rect: Rect
     source_text: str
     state: Literal["pending", "stable"]
+    line_px: int = 0
 
 
 @dataclass
@@ -52,6 +53,7 @@ class RenderItem:
     rect: Rect
     source_text: str
     cached: bool
+    line_px: int = 0
 
 
 @dataclass
@@ -320,6 +322,7 @@ class Pipeline:
                     rect=_offset(block.rect, origin),
                     source_text=block.text,
                     state="stable" if block.state is BlockState.STABLE else "pending",
+                    line_px=block.line_px,
                 )
                 for block in blocks
             ]
@@ -368,7 +371,9 @@ class Pipeline:
         if self._last_mt.get(block.id) == key:
             return
         self._last_mt[block.id] = key
-        self._mt_queue.put(block.id, (epoch, block.text, _offset(block.rect, origin)))
+        self._mt_queue.put(
+            block.id, (epoch, block.text, _offset(block.rect, origin), block.line_px)
+        )
 
     def _mt_loop(self) -> None:
         while self._running:
@@ -376,15 +381,15 @@ class Pipeline:
             task = self._mt_queue.take()
             if task is None:
                 continue
-            block_id, (epoch, text, rect) = task
+            block_id, (epoch, text, rect, line_px) = task
             if epoch != self.epoch or not self.enabled:
                 continue
             if getattr(self.service.engine, "kind", "local") == "online":
-                self._pool.submit(self._translate, block_id, epoch, text, rect)
+                self._pool.submit(self._translate, block_id, epoch, text, rect, line_px)
             else:
-                self._translate(block_id, epoch, text, rect)
+                self._translate(block_id, epoch, text, rect, line_px)
 
-    def _translate(self, block_id: int, epoch: int, text: str, rect: Rect) -> None:
+    def _translate(self, block_id: int, epoch: int, text: str, rect: Rect, line_px: int) -> None:
         self._inflight += 1
         started = self.clock()
         try:
@@ -409,6 +414,7 @@ class Pipeline:
                         rect=rect,
                         source_text=text,
                         cached=cached,
+                        line_px=line_px,
                     )
                 ],
             )

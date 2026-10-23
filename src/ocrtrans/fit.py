@@ -1,4 +1,4 @@
-"""Fit translated text into (or around) the source rectangle."""
+"""Fit translated text inside the source rectangle."""
 
 from __future__ import annotations
 
@@ -68,46 +68,35 @@ def fit_text(
     screen: Rect,
     measure: Measure,
     *,
-    base_ratio: float = 0.8,
-    max_growth: float = 1.8,
+    line_px: int = 0,
     min_font_px: int = 12,
     obstacles: Sequence[Rect] = (),
 ) -> FitResult:
-    """Wrap at source width, grow down, widen, shrink to floor, then ellipsize."""
-    text = " ".join(text.split())
-    base_font = max(min_font_px, round(source.h * base_ratio))
-    max_h = max(source.h, min(int(source.h * max_growth), screen.bottom - source.y))
-    widths = [source.w, min(int(source.w * 1.3), screen.right - source.x)]
-    widths = sorted({max(1, w) for w in widths})
+    """Size from the source line height, shrink inside the box, then ellipsize.
 
-    def build(font: int, width: int, height: int) -> Rect:
-        rect = Rect(source.x, source.y, width, max(source.h, height))
-        if rect.bottom > screen.bottom:
-            rect = Rect(rect.x, screen.bottom - rect.h, rect.w, rect.h)
-        if source.y >= screen.y + screen.h / 2:  # subtitle: grow upward
-            rect = Rect(rect.x, max(screen.y, source.bottom - rect.h), rect.w, rect.h)
-        return rect
+    The painted box never leaves the source rectangle: no widening, no vertical
+    growth. line_px is one OCR line height; 0 falls back to the block height.
+    """
+    text = " ".join(text.split())
+    anchor = line_px if line_px > 0 else source.h * 0.8
+    base_font = max(min_font_px, min(round(anchor * 0.8), source.h))
+    width = max(1, min(source.w, screen.right - source.x))
+    max_h = max(1, source.h)
+
+    def rect_for(height: int) -> Rect:
+        return Rect(source.x, source.y, width, max(1, min(max_h, height)))
 
     def blocked(rect: Rect) -> bool:
         return any(intersects(rect, obstacle) for obstacle in obstacles)
 
-    for width in widths:
-        lines = _wrap(text, width, base_font, measure)
-        height = len(lines) * measure.line_height(base_font)
-        rect = build(base_font, width, height)
+    for font in range(base_font, min_font_px - 1, -1):
+        lines = _wrap(text, width, font, measure)
+        height = len(lines) * measure.line_height(font)
+        rect = rect_for(height)
         if height <= max_h and not blocked(rect):
-            return FitResult(rect, base_font, lines, False)
-
-    for font in range(base_font - 1, min_font_px - 1, -1):
-        for width in widths:
-            lines = _wrap(text, width, font, measure)
-            height = len(lines) * measure.line_height(font)
-            rect = build(font, width, height)
-            if height <= max_h and not blocked(rect):
-                return FitResult(rect, font, lines, False)
+            return FitResult(rect, font, lines, False)
 
     font = min_font_px
-    width = widths[-1]
     line_h = measure.line_height(font)
     lines = _wrap(text, width, font, measure)
     max_lines = max(1, max_h // line_h)
@@ -116,4 +105,4 @@ def fit_text(
     if lines:
         lines[-1] = _ellipsize(lines[-1], width, font, measure)
     height = len(lines) * line_h
-    return FitResult(build(font, width, height), font, lines, truncated)
+    return FitResult(rect_for(height), font, lines, truncated)
