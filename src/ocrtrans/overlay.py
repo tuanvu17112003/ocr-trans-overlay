@@ -30,6 +30,7 @@ WS_EX_TOOLWINDOW = 0x00000080
 @dataclass
 class _Layout:
     item: RenderItem
+    cover: Rect
     rect: Rect
     font_px: int
     lines: list[str]
@@ -148,27 +149,31 @@ class OverlayWindow(QWidget):
 
     # ---- layout -----------------------------------------------------------
 
-    def _fit(self, item: RenderItem, obstacles: list[Rect]) -> _Layout:
+    def _fit(self, item: RenderItem) -> _Layout:
+        # two rects: cover = the whole OCR block, rect = the text inside it
+        inner = Rect(item.rect.x + 2, item.rect.y, max(1, item.rect.w - 4), item.rect.h)
         fit = fit_text(
             item.text,
-            item.rect,
+            inner,
             self.screen_rect,
             self.measure,
             line_px=item.line_px,
             min_font_px=self.config.min_font_px,
-            obstacles=obstacles,
         )
         if fit.truncated and item.block_id not in self._truncated_logged:
             self._truncated_logged.add(item.block_id)
             log.warning("block %s truncated at the font floor", item.block_id)
-        return _Layout(item=item, rect=fit.rect, font_px=fit.font_px, lines=fit.lines)
+        y = inner.y + max(0, (inner.h - fit.rect.h) // 2)
+        return _Layout(
+            item=item,
+            cover=item.rect,
+            rect=Rect(inner.x, y, fit.rect.w, fit.rect.h),
+            font_px=fit.font_px,
+            lines=fit.lines,
+        )
 
     def _recompute(self) -> None:
-        layouts = [self._fit(item, []) for item in self._items]
-        for index, layout in enumerate(layouts):
-            obstacles = [other.rect for j, other in enumerate(layouts) if j != index]
-            layouts[index] = self._fit(layout.item, obstacles)
-        self._layouts = layouts
+        self._layouts = [self._fit(item) for item in self._items]
 
     # ---- painting ---------------------------------------------------------
 
@@ -181,11 +186,18 @@ class OverlayWindow(QWidget):
         dpr = self.dpr
 
         for layout in self._layouts:
+            cover = QRect(
+                round((layout.cover.x - self.screen_rect.x) / dpr),
+                round((layout.cover.y - self.screen_rect.y) / dpr),
+                round(layout.cover.w / dpr),
+                round(layout.cover.h / dpr),
+            )
+            painter.fillRect(cover, bg)
+            painter.save()
+            painter.setClipRect(cover)
             x = round((layout.rect.x - self.screen_rect.x) / dpr)
             y = round((layout.rect.y - self.screen_rect.y) / dpr)
             w = round(layout.rect.w / dpr)
-            h = round(layout.rect.h / dpr)
-            painter.fillRect(QRect(x, y, w, h), bg)
             painter.setPen(fg)
             font = QFont(self.config.font_family)
             font.setPixelSize(max(1, round(layout.font_px / dpr)))
@@ -197,4 +209,5 @@ class OverlayWindow(QWidget):
                     int(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop),
                     line,
                 )
+            painter.restore()
         painter.end()

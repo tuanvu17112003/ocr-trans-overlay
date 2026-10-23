@@ -1,0 +1,53 @@
+import queue
+
+from ocrtrans.config import Config
+from ocrtrans.geometry import Rect
+from ocrtrans.overlay import OverlayWindow
+from ocrtrans.pipeline import RenderItem
+
+
+def make_item(text="Xin chào", rect=Rect(100, 100, 200, 80)):
+    return RenderItem(
+        block_id=1,
+        text=text,
+        rect=rect,
+        source_text="Hello world",
+        cached=False,
+        line_px=20,
+    )
+
+
+def make_overlay(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
+    overlay.show_items([make_item()])
+    return overlay
+
+
+def test_cover_is_the_source_block(qapp):
+    overlay = make_overlay(qapp)
+    layout = overlay._layouts[0]
+    assert layout.cover == Rect(100, 100, 200, 80)
+    assert layout.rect.x >= 100 and layout.rect.y >= 100
+    assert layout.rect.x + layout.rect.w <= 300
+    assert layout.rect.y + layout.rect.h <= 180
+    overlay.close()
+
+
+def test_text_is_centered_vertically_inside_the_cover(qapp):
+    overlay = make_overlay(qapp)
+    layout = overlay._layouts[0]
+    top_gap = layout.rect.y - 100
+    bottom_gap = 180 - (layout.rect.y + layout.rect.h)
+    assert abs(top_gap - bottom_gap) <= 2
+    overlay.close()
+
+
+def test_background_fills_the_cover_with_opaque_color(qapp):
+    overlay = make_overlay(qapp)
+    image = overlay.grab().toImage()
+    expected = Config().bg_color.lower()
+    for x, y in ((102, 102), (297, 102), (102, 177), (297, 177)):
+        color = image.pixelColor(x, y)
+        assert color.alpha() == 255, (x, y)
+        assert color.name() == expected, (x, y, color.name())
+    overlay.close()
