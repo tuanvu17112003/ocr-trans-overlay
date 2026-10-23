@@ -15,7 +15,8 @@ import numpy as np
 
 from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
-from .geometry import Rect, union_all
+from .geometry import Box, Rect, union_all
+from .ocr import group_blocks
 from .stats import LatencyStats
 from .track import BlockState, Decision, TemporalTracker, TrackBlock
 from .translate import Engine, TranslationCache, TranslationService
@@ -339,6 +340,16 @@ class Pipeline:
         if decision.full_detect:
             known = set(self._known_ids)
             boxes = self.ocr.read(frame)
+            grouped = group_blocks(boxes)
+            boxes = [
+                Box(
+                    rect=block.rect,
+                    text=block.text,
+                    confidence=min(line.confidence for line in block.lines),
+                    line_px=block.line_px,
+                )
+                for block in grouped
+            ]
             blocks = self.tracker.observe(boxes, self.clock())
             observed = sorted(known | {block.id for block in blocks})
         else:

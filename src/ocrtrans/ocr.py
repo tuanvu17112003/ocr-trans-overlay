@@ -21,6 +21,10 @@ class Block:
     def text(self) -> str:
         return " ".join(line.text for line in self.lines)
 
+    @property
+    def line_px(self) -> int:
+        return _median([line.rect.h for line in self.lines]) if self.lines else self.rect.h
+
 
 def _median(values: list[int]) -> int:
     if not values:

@@ -6,7 +6,7 @@ import numpy as np
 from ocrtrans.capture import Health
 from ocrtrans.geometry import Box, Rect
 from ocrtrans.pipeline import EventKind, Pipeline
-from ocrtrans.track import BlockState, Decision, TrackBlock
+from ocrtrans.track import BlockState, Decision, TemporalTracker, TrackBlock
 from ocrtrans.translate import TranslationCache, TranslationService
 
 
@@ -97,6 +97,7 @@ class SlowEngine:
 def pipeline_with(
     engine=None,
     ocr=None,
+    tracker=None,
     tracker_returns_crop=False,
     tracker_returns_skip=False,
     region=None,
@@ -106,7 +107,8 @@ def pipeline_with(
     p = Pipeline(
         capture=FakeCapture(np.full((100, 200, 3), 30, np.uint8)),
         ocr=ocr or FakeOcr(),
-        tracker=FakeTracker(crop=tracker_returns_crop, skip=tracker_returns_skip),
+        tracker=tracker
+        or FakeTracker(crop=tracker_returns_crop, skip=tracker_returns_skip),
         service=TranslationService(engine, TranslationCache()),
         emit=events.append,
         fps=60,
@@ -191,4 +193,20 @@ def test_emitted_rects_are_screen_coordinates():
     p.start()
     event = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
     assert event.blocks[0].rect == Rect(100, 50, 50, 12)
+    p.stop()
+
+
+def test_pipeline_groups_stacked_lines_into_one_block():
+    ocr = FakeOcr(
+        boxes=[
+            Box(Rect(10, 10, 180, 20), "Open the gate", 0.9),
+            Box(Rect(10, 32, 180, 20), "traveler.", 0.9),
+        ]
+    )
+    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
+    p = pipeline_with(ocr=ocr, tracker=tracker)
+    p.start()
+    event = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
+    assert len(event.blocks) == 1
+    assert event.blocks[0].source_text == "Open the gate traveler."
     p.stop()

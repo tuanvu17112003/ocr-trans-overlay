@@ -32,6 +32,7 @@ class Box:
     rect: Rect
     text: str
     confidence: float
+    line_px: int = 0
 
 
 def intersects(a: Rect, b: Rect) -> bool:
