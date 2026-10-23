@@ -132,9 +132,10 @@ class ControlWindow(QWidget):
         self.set_status(stats)
 
     def set_status(self, stats: dict) -> None:
-        errors = stats.get("ocr_errors", 0)
-        error_text = f"   err {errors}" if errors else ""
-        self.status_label.setText(
+        ocr_errors = stats.get("ocr_errors", 0)
+        mt_errors = stats.get("mt_errors", 0)
+        error_text = f"   err {ocr_errors}/{mt_errors}" if (ocr_errors or mt_errors) else ""
+        text = (
             f"engine {stats.get('engine', self.engine.currentText())}   "
             f"{stats.get('health', '-')}\n"
             f"OCR {stats.get('ocr_passes', 0)} pass   "
@@ -142,6 +143,9 @@ class ControlWindow(QWidget):
             f"queue {stats.get('ocr_queue', 0)}   MT {stats.get('mt_queue', 0)}\n"
             f"p50 {stats.get('p50', '-')} ms   p95 {stats.get('p95', '-')} ms"
         )
+        if stats.get("error"):
+            text += f"\n{stats['error']}"
+        self.status_label.setText(text)
 
     def read_config(self) -> Config:
         cfg = self.config

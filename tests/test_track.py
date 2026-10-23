@@ -106,5 +106,6 @@ def test_static_screen_without_text_skips_between_full_detects():
     frame = np.zeros((100, 120, 3), np.uint8)
     assert t.update(frame, 0.0).full_detect
     t.observe([], 0.0)
-    decisions = [t.update(frame, 0.06 * index) for index in range(1, 8)]
-    assert all(decision.skip for decision in decisions)
+    skipped = [t.update(frame, 0.06 * index) for index in range(1, 8)]
+    assert all(decision.skip for decision in skipped)
+    assert t.update(frame, 1.5).full_detect

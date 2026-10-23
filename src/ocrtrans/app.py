@@ -1,4 +1,4 @@
-"""Application entry point: control window, capture, OCR, translation, overlay."""
+﻿"""Application entry point: control window, capture, OCR, translation, overlay."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def main() -> int:
     overlay.hide()
 
     capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
-    state: dict = {"pipeline": None, "engine_name": None, "running": False}
+    state: dict = {"pipeline": None, "engine_name": None, "running": False, "starting": False, "error": ""}
     actions: queue.Queue = queue.Queue()
     hotkeys = HotkeyManager()
     hud_state = {"visible": False}
@@ -107,31 +107,45 @@ def main() -> int:
                 "p95": "-",
                 "ocr_passes": 0,
                 "ocr_errors": 0,
+                "mt_errors": 0,
                 "blocks": 0,
+                "error": state["error"],
             }
         return {
             **pipeline.stats(),
             "engine": state["engine_name"] or cfg.engine,
             "health": capture.health.name,
+            "error": state["error"],
         }
 
     hud = HudWindow(status)
 
     def load_engine(config: Config):
-        """Build and load a model, keeping the window responsive and honest."""
+        """Build and load a model, showing progress without re-entering start()."""
         window.set_status_text("loading model...")
-        QApplication.processEvents()
+        window.repaint()
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            return build_engine(config)
+            engine = build_engine(config)
         except Exception as exc:  # noqa: BLE001 - a failed load must not kill the app
             log.exception("model load failed")
-            window.set_status_text(f"load failed: {exc}")
+            state["error"] = f"load failed: {exc}"
             return None
         finally:
             QApplication.restoreOverrideCursor()
+        state["error"] = ""
+        return engine
 
     def start() -> None:
+        if state["starting"]:
+            return
+        state["starting"] = True
+        try:
+            _start()
+        finally:
+            state["starting"] = False
+
+    def _start() -> None:
         window.read_config()
         save_config(cfg)
         pipeline = state["pipeline"]
@@ -159,14 +173,17 @@ def main() -> int:
             if state["engine_name"] != cfg.engine:
                 # free the old model before the new one allocates VRAM
                 pipeline.set_enabled(False)
-                pipeline.unload_engine()
+                if not pipeline.unload_engine():
+                    state["error"] = "translation still finishing; press Start again"
+                    window.set_running(False)
+                    return
                 state["engine_name"] = None
                 engine = load_engine(cfg)
                 if engine is None:
                     window.set_running(False)
                     return
                 pipeline.adopt_engine(engine)
-                state["engine_name"] = cfg.engine
+                state["engine_name"] = engine.name
             pipeline.fps = cfg.capture_fps
             pipeline.tracker.set_profile(cfg.stability_profile)
             rects = RegionSet.from_config(cfg, screen)
@@ -283,3 +300,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

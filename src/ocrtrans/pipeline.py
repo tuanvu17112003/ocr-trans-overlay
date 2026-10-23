@@ -19,7 +19,7 @@ from .geometry import Box, Rect, union_all
 from .ocr import group_blocks
 from .stats import LatencyStats
 from .track import BlockState, Decision, TemporalTracker, TrackBlock
-from .translate import Engine, TranslationCache, TranslationService
+from .translate import Engine, TranslationService
 
 log = logging.getLogger(__name__)
 
@@ -161,7 +161,6 @@ class Pipeline:
         self._ocr_queue = _Latest()
         self._mt_queue = _LatestPerKey()
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="http")
-        self._pending_engine: Engine | None = None
         self._switch_lock = threading.Lock()
         self._last_mt: dict[int, tuple[str, int]] = {}
         self._known_ids: set[int] = set()
@@ -211,30 +210,17 @@ class Pipeline:
         self.tracker.reset()
         self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
 
-    def set_engine(self, engine: Engine) -> None:
-        self.epoch += 1
-        self._pending_engine = engine
-        self._mt_queue.clear()
-        self._last_mt.clear()
-        self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
-
-    def unload_engine(self) -> None:
-        """Free the current model. Only valid while paused."""
+    def unload_engine(self, timeout: float = 5.0) -> bool:
+        """Free the current model. Only valid while paused; False means busy."""
         if self.enabled:
             raise RuntimeError("pause the pipeline before unloading the engine")
         with self._switch_lock:
-            self.service.engine.unload()
-            self._pending_engine = None
+            return self.service.release(timeout)
 
     def adopt_engine(self, engine: Engine) -> None:
         """Install an already-loaded engine after unload_engine()."""
         with self._switch_lock:
-            old = self.service.engine
-            if old is not engine:
-                old.unload()
-            self.service.engine = engine
-            self.service.cache = TranslationCache()
-            self._pending_engine = None
+            self.service.adopt(engine)
         self.epoch += 1
         self._ocr_queue.clear()
         self._mt_queue.clear()
@@ -263,6 +249,7 @@ class Pipeline:
             "ocr_passes": self._ocr_passes,
             "ocr_errors": self._ocr_errors,
             "blocks": self._last_blocks,
+            "mt_errors": self.service.errors,
             "ocr_queue": self._ocr_queue.qsize(),
             "mt_queue": self._mt_queue.qsize(),
             "inflight": self._inflight,
@@ -417,7 +404,6 @@ class Pipeline:
 
     def _mt_loop(self) -> None:
         while self._running:
-            self._maybe_switch()
             task = self._mt_queue.take()
             if task is None:
                 continue
@@ -470,7 +456,6 @@ class Pipeline:
                     line_px=line_px,
                 )
             )
-        self._maybe_switch()
         if items:
             self.emit(
                 PipelineEvent(
@@ -482,6 +467,8 @@ class Pipeline:
             )
 
     def _translate(self, block_id: int, epoch: int, text: str, rect: Rect, line_px: int) -> None:
+        if not self.enabled or epoch != self.epoch:
+            return
         self._inflight += 1
         started = self.clock()
         try:
@@ -491,7 +478,6 @@ class Pipeline:
             return
         finally:
             self._inflight -= 1
-        self._maybe_switch()
         if epoch != self.epoch or not self.enabled:
             return
         self.emit(
@@ -512,20 +498,6 @@ class Pipeline:
             )
         )
 
-    def _maybe_switch(self) -> None:
-        with self._switch_lock:
-            engine = self._pending_engine
-            if engine is None:
-                return
-            try:
-                self.service.switch(engine)
-            except RuntimeError:
-                return  # still translating; retry on the next loop tick
-            except Exception:  # noqa: BLE001 - a broken model must not kill the MT thread
-                log.exception("engine switch failed")
-                self._pending_engine = None
-                return
-            self._pending_engine = None
-            # translations are engine-specific
-            self.service.cache = TranslationCache()
+
+
 

@@ -138,22 +138,17 @@ def test_slow_online_request_does_not_block_local_ocr():
     p.stop()
 
 
-def test_engine_switch_drops_inflight_result():
+def test_engine_switch_refuses_while_a_translation_is_running():
     slow = SlowEngine(delay=None, name="slow", prefix="SLOW: ")
     p = pipeline_with(engine=slow)
     p.start()
     assert slow.started.wait(2.0), "slow inference never started"
-    p.set_engine(FastEngine(prefix="FAST: "))
+    p.set_enabled(False)
+    assert p.unload_engine(timeout=0.1) is False
+    assert slow.unloaded_before_finish is False, "engine unloaded while in use"
     slow.release.set()
     assert slow.finished.wait(2.0), "old worker never finished"
-    assert slow.unloaded_before_finish is False, "engine unloaded while in use"
-    emitted = [
-        i.text
-        for e in p.events()
-        if e.kind == EventKind.TRANSLATION_RESULT
-        for i in e.items
-    ]
-    assert not any(t.startswith("SLOW: ") for t in emitted)
+    assert p.unload_engine(timeout=2.0) is True
     p.stop()
 
 
@@ -270,6 +265,7 @@ def test_adopt_engine_frees_the_old_model_without_reloading():
     old.load()
     new.load()
     p.set_enabled(False)
+    assert p.unload_engine(timeout=0.1) is True
     p.adopt_engine(new)
     assert old.unloads == 1
     assert new.loads == 1
@@ -294,3 +290,27 @@ def test_stats_report_how_many_blocks_the_last_pass_found():
     assert p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
     assert p.stats()["blocks"] == 1
     p.stop()
+
+
+class BadEngine:
+    name, kind = "bad", "local"
+
+    def load(self):
+        pass
+
+    def unload(self):
+        pass
+
+    def translate(self, texts):
+        raise RuntimeError("translator broke")
+
+
+def test_translation_failure_is_counted_not_silent():
+    p = pipeline_with(engine=BadEngine())
+    p.start()
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and p.stats()["mt_errors"] == 0:
+        time.sleep(0.05)
+    stats = p.stats()
+    p.stop()
+    assert stats["mt_errors"] >= 1

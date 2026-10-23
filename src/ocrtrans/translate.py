@@ -1,14 +1,18 @@
-"""Translation engines (local NLLB / EnViT5), cache and service."""
+﻿"""Translation engines (local NLLB / EnViT5), cache and service."""
 
 from __future__ import annotations
 
+import logging
 import threading
+import time
 import unicodedata
 from collections import OrderedDict
 from pathlib import Path
 from typing import Literal, Protocol
 
 MAX_NEW_TOKENS = 96
+
+log = logging.getLogger(__name__)
 
 
 class Engine(Protocol):
@@ -146,6 +150,7 @@ class TranslationService:
         self._lock = threading.Lock()
         self._in_flight = 0
         self.degraded = False
+        self.errors = 0
 
     def translate(self, text: str) -> tuple[str, bool]:
         key = normalize(text)
@@ -162,6 +167,7 @@ class TranslationService:
             try:
                 result = self._call(self.engine, key)
             except Exception:  # noqa: BLE001 - online failure falls back to local
+                self._count_error()
                 if self.fallback is None:
                     raise
                 result = self._call(self.fallback, key)
@@ -219,12 +225,38 @@ class TranslationService:
             try:
                 return self._call_batch(self.engine, texts)
             except Exception:  # noqa: BLE001 - online failure falls back to local
+                self._count_error()
                 if self.fallback is None:
                     return [""] * len(texts)
                 return self._call_batch(self.fallback, texts)
         finally:
             with self._lock:
                 self._in_flight -= 1
+
+    def _count_error(self) -> None:
+        with self._lock:
+            self.errors += 1
+        if self.errors == 1 or self.errors % 100 == 0:
+            log.exception("translation failed (%d so far)", self.errors)
+
+    def release(self, timeout: float = 5.0) -> bool:
+        """Unload the current engine once no translation is in flight."""
+        deadline = time.monotonic() + timeout
+        while True:
+            with self._lock:
+                if not self._in_flight:
+                    self.engine.unload()
+                    _empty_cuda_cache()
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+
+    def adopt(self, engine: Engine) -> None:
+        """Install an already-loaded engine and drop the old cache."""
+        with self._lock:
+            self.engine = engine
+            self.cache = TranslationCache()
 
     def _call_batch(self, engine: Engine, texts: list[str]) -> list[str]:
         if hasattr(engine, "primary"):  # OnlineRouter only accepts a single text
@@ -251,3 +283,4 @@ class TranslationService:
                 old.unload()
                 _empty_cuda_cache()
             self.engine = engine
+
