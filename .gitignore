@@ -4,3 +4,4 @@ __pycache__/
 .pytest_cache/
 .superpowers/
 bench/report.md
+*.egg-info/

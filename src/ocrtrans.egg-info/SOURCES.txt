@@ -1,9 +1,0 @@
-pyproject.toml
-src/ocrtrans/__init__.py
-src/ocrtrans/config.py
-src/ocrtrans/logging_setup.py
-src/ocrtrans.egg-info/PKG-INFO
-src/ocrtrans.egg-info/SOURCES.txt
-src/ocrtrans.egg-info/dependency_links.txt
-src/ocrtrans.egg-info/top_level.txt
-tests/test_config.py
