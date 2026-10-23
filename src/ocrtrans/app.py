@@ -1,4 +1,4 @@
-"""Application entry point: wires capture, OCR, translation, overlay and hotkeys."""
+"""Application entry point: control window, capture, OCR, translation, overlay."""
 
 from __future__ import annotations
 
@@ -7,10 +7,9 @@ import logging
 import queue
 import sys
 from dataclasses import asdict
-from pathlib import Path
 
 import requests
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from .capture import CaptureManager, DxgiBackend, WgcBackend
@@ -27,8 +26,8 @@ from .pipeline import Pipeline
 from .regions import RegionSet, from_physical
 from .track import TemporalTracker
 from .translate import Envit5Engine, NllbEngine, TranslationCache, TranslationService
+from .ui.control import ControlWindow
 from .ui.picker import pick_regions
-from .ui.settings import SettingsDialog
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +50,7 @@ def build_local(name: str):
     from huggingface_hub import snapshot_download
 
     engine = NllbEngine if name == "nllb" else Envit5Engine
-    local = engine(Path(snapshot_download(LOCAL_REPOS[name])))
+    local = engine(snapshot_download(LOCAL_REPOS[name]))
     local.load()
     return local
 
@@ -78,7 +77,7 @@ def build_engine(cfg: Config):
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--smoke", action="store_true", help="start, run 4 s, quit")
+    parser.add_argument("--smoke", action="store_true", help="start, run 8 s, quit")
     args = parser.parse_args()
 
     setup_logging()
@@ -90,78 +89,142 @@ def main() -> int:
 
     events: queue.Queue = queue.Queue()
     overlay = OverlayWindow(screen, cfg, events)
-    service = TranslationService(build_engine(cfg), TranslationCache())
+    overlay.hide()
+
     capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
-    pipeline = Pipeline(
-        capture,
-        RapidOcrEngine(),
-        TemporalTracker(cfg.stability_profile),
-        service,
-        events.put,
-        gate=AffinityGate(),
-        fps=cfg.capture_fps,
-    )
-    rects = RegionSet.from_config(cfg, screen)
-    pipeline.set_regions(rects)
-    overlay.set_regions(rects)
-    pipeline.start()
-
-    hud = HudWindow(
-        lambda: {
-            **pipeline.stats(),
-            "engine": service.engine.name,
-            "health": capture.health.name,
-        }
-    )
-    hud_state = {"visible": False}
-
+    state: dict = {"pipeline": None, "engine_name": None, "running": False}
     actions: queue.Queue = queue.Queue()
     hotkeys = HotkeyManager()
+    hud_state = {"visible": False}
 
-    def handle(action: str) -> None:
-        if action == "quit":
-            shutdown()
-            app.quit()
-        elif action == "toggle":
-            pipeline.set_enabled(not pipeline.enabled)
-            if not pipeline.enabled:
-                overlay.clear()
-        elif action == "region":
-            overlay.hide()
-            picked = pick_regions(screen)
+    def status() -> dict:
+        pipeline = state["pipeline"]
+        if pipeline is None:
+            return {"engine": cfg.engine, "health": "-", "p50": "-", "p95": "-"}
+        return {
+            **pipeline.stats(),
+            "engine": state["engine_name"] or cfg.engine,
+            "health": capture.health.name,
+        }
+
+    hud = HudWindow(status)
+
+    def start() -> None:
+        window.read_config()
+        save_config(cfg)
+        pipeline = state["pipeline"]
+        if pipeline is None:
+            window.set_status_text("loading model...")
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            try:
+                engine = build_engine(cfg)
+            finally:
+                QApplication.restoreOverrideCursor()
+            pipeline = Pipeline(
+                capture,
+                RapidOcrEngine(),
+                TemporalTracker(cfg.stability_profile),
+                TranslationService(engine, TranslationCache()),
+                events.put,
+                gate=AffinityGate(),
+                fps=cfg.capture_fps,
+            )
+            rects = RegionSet.from_config(cfg, screen)
+            pipeline.set_regions(rects)
+            overlay.set_regions(rects)
+            pipeline.start()
+            state["pipeline"] = pipeline
+            state["engine_name"] = engine.name
+        else:
+            if state["engine_name"] != cfg.engine:
+                window.set_status_text("switching engine...")
+                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+                try:
+                    pipeline.set_engine(build_engine(cfg))
+                finally:
+                    QApplication.restoreOverrideCursor()
+                state["engine_name"] = cfg.engine
+            pipeline.fps = cfg.capture_fps
+            pipeline.tracker.set_profile(cfg.stability_profile)
+            rects = RegionSet.from_config(cfg, screen)
+            pipeline.set_regions(rects)
+            overlay.set_regions(rects)
+            pipeline.set_enabled(True)
+        overlay.show()
+        state["running"] = True
+        window.set_running(True)
+
+    def stop() -> None:
+        pipeline = state["pipeline"]
+        if pipeline is not None:
+            pipeline.set_enabled(False)
+        overlay.clear()
+        overlay.hide()
+        state["running"] = False
+        window.set_running(False)
+
+    def pick() -> None:
+        overlay.hide()
+        picked = pick_regions(screen)
+        if state["running"]:
             overlay.show()
-            if picked:
-                pipeline.set_regions(picked)
-                overlay.set_regions(picked)
-                cfg.regions = [asdict(from_physical(rect, screen)) for rect in picked]
-                save_config(cfg)
-        elif action == "mode":
-            cfg.region_mode = MODES[(MODES.index(cfg.region_mode) + 1) % len(MODES)]
-            save_config(cfg)
-            new_rects = RegionSet.from_config(cfg, screen)
-            pipeline.set_regions(new_rects)
-            overlay.set_regions(new_rects)
-        elif action == "settings":
-            dialog = SettingsDialog(cfg, apply_settings)
-            dialog.exec()
-        elif action == "hud":
-            hud_state["visible"] = not hud_state["visible"]
-            hud.set_visible(hud_state["visible"])
+        if not picked:
+            return
+        cfg.regions = [asdict(from_physical(rect, screen)) for rect in picked]
+        save_config(cfg)
+        rects = RegionSet.from_config(cfg, screen)
+        pipeline = state["pipeline"]
+        if pipeline is not None:
+            pipeline.set_regions(rects)
+        overlay.set_regions(rects)
+        window.set_regions(len(rects))
 
     def apply_settings(new_cfg: Config) -> None:
-        pipeline.fps = new_cfg.capture_fps
-        pipeline.tracker.set_profile(new_cfg.stability_profile)
-        pipeline.set_engine(build_engine(new_cfg))
-        new_rects = RegionSet.from_config(new_cfg, screen)
-        pipeline.set_regions(new_rects)
-        overlay.set_regions(new_rects)
+        save_config(new_cfg)
+        pipeline = state["pipeline"]
+        if pipeline is not None:
+            pipeline.fps = new_cfg.capture_fps
+            pipeline.tracker.set_profile(new_cfg.stability_profile)
+
+    def cycle_mode() -> None:
+        cfg.region_mode = MODES[(MODES.index(cfg.region_mode) + 1) % len(MODES)]
+        save_config(cfg)
+        window.mode.setCurrentText(cfg.region_mode)
+        rects = RegionSet.from_config(cfg, screen)
+        pipeline = state["pipeline"]
+        if pipeline is not None:
+            pipeline.set_regions(rects)
+        overlay.set_regions(rects)
+        window.set_regions(len(rects))
 
     def shutdown() -> None:
         hotkeys.unregister_all()
-        pipeline.stop()
+        pipeline = state["pipeline"]
+        if pipeline is not None:
+            pipeline.stop()
         overlay.close()
         hud.close()
         capture.close()
+
+    def handle(action: str) -> None:
+        if action == "quit":
+            app.quit()
+        elif action == "toggle":
+            stop() if state["running"] else start()
+        elif action == "region":
+            pick()
+        elif action == "mode":
+            cycle_mode()
+        elif action == "hud":
+            hud_state["visible"] = not hud_state["visible"]
+            hud.set_visible(hud_state["visible"])
+        elif action == "settings":
+            window.show()
+            window.raise_()
+
+    window = ControlWindow(cfg, start, stop, pick, apply_settings, status, on_close=app.quit)
+    window.set_regions(len(RegionSet.from_config(cfg, screen)))
+    window.show()
 
     try:
         hotkeys.register(cfg.keys or DEFAULT_KEYS, actions.put)
@@ -183,11 +246,15 @@ def main() -> int:
 
     if args.smoke:
         def finish() -> None:
-            print("stats:", pipeline.stats())
-            shutdown()
+            pipeline = state["pipeline"]
+            print("stats:", None if pipeline is None else pipeline.stats())
             app.quit()
 
-        QTimer.singleShot(4000, finish)
+        def smoke_start() -> None:
+            start()
+            QTimer.singleShot(8000, finish)
+
+        QTimer.singleShot(0, smoke_start)
     return app.exec()
 
 
