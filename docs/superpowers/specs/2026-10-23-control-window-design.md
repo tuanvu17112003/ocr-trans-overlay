@@ -92,6 +92,46 @@ source and overlapping other text, translations wrong.
 - Manual: open the window, Start/Stop, switch engine, pick a region, confirm painted boxes
   stay inside the source lines.
 
+## Real integration tests
+
+Unit tests keep their fakes: they are fast and cover logic. A second layer proves the
+hardware path on the actual game.
+
+- `tests/conftest.py`: `--run-real` option plus a `real` marker. Without the flag every
+  real test is skipped with a reason (pytest `addoption` + `collection_modifyitems`).
+- `tests/real/test_game.py`:
+  - `game_window` fixture: `EnumWindows`, title contains `gunfire`, pick the top-level
+    game window (not the launcher); skip when missing or minimized.
+  - `test_capture_game_window`: real `WindowsCapture(window_hwnd=...)` first frame; assert
+    it is not None, has 3 or 4 channels and luma above black.
+  - `test_ocr_game_frame`: real `RapidOcrEngine`; assert boxes come back and record the
+    time; skip with a reason when the current screen has no text.
+  - `test_translate_game_text`: real engine from config; translate the first blocks;
+    assert every result is non-empty, numbers are preserved, record the total time.
+  - `test_pipeline_against_game`: real capture + OCR + MT + tracker for 15 s; assert all
+    threads alive, `ocr_passes >= 1`, events flowing; fail if a thread died.
+- Run with the game open in borderless mode:
+  `pytest -m real --run-real -q`.
+
+Measured on this machine (Gunfire Reborn settings screen, 2560x1440): WGC window capture
+OK, mean 85.1; OCR 38 boxes / 37 blocks; first call 2.9 s including model load.
+
+## Calls made from the builder check
+
+1. **Stop is a pause.** `set_enabled(False)` plus overlay clear; threads and the model
+   stay. Quit tears down. Start after the first one just re-enables.
+2. **Nothing runs before Start.** The app opens the control window only; engine, capture
+   and overlay start on the first Start, so no 2.4 GB download without consent.
+3. **Batching** uses one `translate(list)` call for engines that return a list;
+   `OnlineRouter` is single-text and is called per item.
+4. **The 12-block cap** applies after dedupe and before `_last_mt` is marked, so overflow
+   is deferred to the next pass instead of being dropped.
+5. **Region picker replaces all regions.** Multi mode keeps using the stored list.
+6. **A failed batch** falls back to the local engine once when configured; otherwise the
+   failed items yield `""`, their `_last_mt` entry is cleared and they retry next pass.
+7. **Paragraph matching** keeps `iou >= 0.5` and also accepts containment
+   `intersection / min(area) >= 0.7`, so a paragraph that grows one line keeps its id.
+
 ## Risks
 
 - NLLB-600M still mistranslates short game lines; grouping reduces but does not remove it.
