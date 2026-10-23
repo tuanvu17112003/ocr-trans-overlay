@@ -33,6 +33,7 @@ class TrackBlock:
     stable_passes: int = 0
     miss_count: int = 0
     last_seen_pass: int = 0
+    line_px: int = 0
 
 
 @dataclass
@@ -44,6 +45,18 @@ class Decision:
 
 def _normalize(text: str) -> str:
     return " ".join(text.lower().split())
+
+
+def _match(a: Rect, b: Rect) -> bool:
+    """Same block when IoU is decent or one rect mostly contains the other."""
+    if iou(a, b) >= 0.5:
+        return True
+    inter_w = min(a.right, b.right) - max(a.x, b.x)
+    inter_h = min(a.bottom, b.bottom) - max(a.y, b.y)
+    if inter_w <= 0 or inter_h <= 0:
+        return False
+    smaller = min(a.w * a.h, b.w * b.h)
+    return smaller > 0 and (inter_w * inter_h) / smaller >= 0.7
 
 
 def _locked(method):
@@ -189,16 +202,18 @@ class TemporalTracker:
         """scope limits which blocks may be counted missing (crop scans)."""
         matched: set[int] = set()
         for box in boxes:
-            best, best_iou = None, 0.5
+            best = None
             for block in self._blocks:
-                score = iou(block.rect, box.rect)
-                if score >= best_iou:
-                    best, best_iou = block, score
+                if _match(block.rect, box.rect):
+                    best = block
+                    break
             if best is None:
                 best = TrackBlock(id=self._next_id, rect=box.rect)
                 self._next_id += 1
                 self._blocks.append(best)
             matched.add(best.id)
+            if box.line_px:
+                best.line_px = box.line_px
             self._apply_text(best, box.text, now)
 
         for block in self._blocks:

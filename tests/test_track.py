@@ -75,3 +75,20 @@ def test_set_profile_changes_stability_window():
     t.observe([box], 0.07)
     assert t.blocks()[0].state is BlockState.STABLE
 
+
+
+def test_block_keeps_line_height():
+    t = TemporalTracker()
+    t.observe([Box(Rect(0, 0, 200, 20), "A", 0.9, line_px=18)], 0.0)
+    assert t.blocks()[0].line_px == 18
+
+
+def test_grown_paragraph_keeps_its_id():
+    t = TemporalTracker()
+    t.observe([Box(Rect(0, 0, 200, 20), "A", 0.9)], 0.0)
+    first = t.blocks()[0].id
+    t.observe([Box(Rect(0, 0, 200, 60), "A B C", 0.9)], 0.07)
+    blocks = t.blocks()
+    assert len(blocks) == 1
+    assert blocks[0].id == first
+
