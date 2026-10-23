@@ -1,4 +1,4 @@
-import numpy as np
+﻿import numpy as np
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
@@ -70,4 +70,21 @@ def test_five_line_paragraph_stays_one_block():
     blocks = group_blocks(boxes)
     assert len(blocks) == 1
     assert len(blocks[0].lines) == 5
+
+
+
+def test_tight_lines_do_not_interleave_groups():
+    boxes = [Box(Rect(10, 10 + index * 15, 200, 20), f"line {index}", 0.9) for index in range(4)]
+    blocks = group_blocks(boxes)
+    assert len(blocks) == 4
+    assert all(len(block.lines) == 1 for block in blocks)
+
+
+def test_split_line_is_one_block():
+    boxes = [Box(Rect(10, 100, 50, 22), "Open", 0.9), Box(Rect(64, 100, 80, 22), "the gate", 0.9)]
+    blocks = group_blocks(boxes)
+    assert len(blocks) == 1
+    assert blocks[0].text == "Open the gate"
+
+
 

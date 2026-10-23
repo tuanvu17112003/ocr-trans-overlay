@@ -116,3 +116,11 @@ def test_block_stays_hidden_until_its_translation_arrives():
 
 
 
+
+
+def test_translation_for_old_text_is_dropped_after_pending_change():
+    s = OverlayState()
+    s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO")]), 0.0)
+    s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO THERE", state="pending")]), 0.05)
+    assert s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "XIN CHAO", source="HELLO")]), 0.1) == []
+

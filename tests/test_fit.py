@@ -1,4 +1,4 @@
-from ocrtrans.fit import fit_text
+﻿from ocrtrans.fit import fit_text
 from ocrtrans.geometry import Rect
 
 
@@ -39,13 +39,3 @@ def test_respects_font_floor_then_truncates():
     r = fit_text("x" * 400, Rect(0, 0, 100, 20), Rect(0, 0, 200, 100), MonoMeasure(), min_font_px=12)
     assert r.font_px == 12 and r.truncated is True
 
-
-def test_never_overlaps_obstacle():
-    r = fit_text(
-        "một hai ba",
-        Rect(0, 0, 200, 20),
-        Rect(0, 0, 1920, 1080),
-        MonoMeasure(),
-        obstacles=[Rect(0, 24, 200, 200)],
-    )
-    assert r.rect.bottom <= 24

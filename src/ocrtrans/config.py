@@ -19,7 +19,6 @@ class Config:
     capture_fps: int = 15
     region_mode: str = "single"
     regions: list[dict] = field(default_factory=list)
-    overlay_opacity: float = 1.0
     min_font_px: int = 12
     font_family: str = "Segoe UI"
     text_color: str = "#FFFFFF"
@@ -43,8 +42,6 @@ def _validate(cfg: Config) -> None:
         raise ValueError(f"stability_profile: {cfg.stability_profile!r} must be safe or fast")
     if not 5 <= cfg.capture_fps <= 30:
         raise ValueError(f"capture_fps: {cfg.capture_fps} must be between 5 and 30")
-    if not 0.6 <= cfg.overlay_opacity <= 1.0:
-        raise ValueError(f"overlay_opacity: {cfg.overlay_opacity} must be between 0.6 and 1.0")
     if cfg.region_mode not in REGION_MODES:
         raise ValueError(f"region_mode: {cfg.region_mode!r} must be one of {sorted(REGION_MODES)}")
     if cfg.min_font_px < 8:

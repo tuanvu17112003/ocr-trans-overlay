@@ -49,16 +49,20 @@ def group_blocks(
     groups: list[list[Box]] = []
     for box in kept:
         placed = False
-        for group in groups:
-            if len(group) >= max_lines:
-                continue
+        if groups and len(groups[-1]) < max_lines:
+            group = groups[-1]
             last = group[-1]
-            gap = box.rect.y - last.rect.bottom
+            v_gap = box.rect.y - last.rect.bottom
+            h_gap = box.rect.x - last.rect.right
+            same_row = (
+                abs(box.rect.y - last.rect.y) <= 0.2 * line_h
+                and -0.4 * line_h <= h_gap <= 0.4 * line_h
+            )
             same_column = abs(box.rect.x - group[0].rect.x) <= 2 * line_h
-            if -0.2 * line_h <= gap <= max_gap_ratio * line_h and same_column:
+            vertical = -0.2 * line_h <= v_gap <= max_gap_ratio * line_h and same_column
+            if same_row or vertical:
                 group.append(box)
                 placed = True
-                break
         if not placed:
             groups.append([box])
 

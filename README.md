@@ -38,9 +38,9 @@ run.bat
 ```
 
 or `.venv\Scripts\python -m ocrtrans.app`. The control window opens with every setting:
-engine, keys, stability profile, fps, region mode and picker, minimum font, overlay
-opacity, plus Start/Stop and live status (engine, capture health, OCR passes, queues,
-p50/p95). Nothing is downloaded or captured until Start. Closing the window quits.
+engine, keys, stability profile, fps, region mode and picker, minimum font, plus
+Start/Stop and live status (engine, capture health, OCR passes, queues, p50/p95).
+Nothing is downloaded or captured until Start. Closing the window quits.
 
 ## Hotkeys
 

@@ -8,7 +8,6 @@ from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QLabel,
     QLineEdit,
@@ -67,10 +66,6 @@ class ControlWindow(QWidget):
         self.min_font = QSpinBox()
         self.min_font.setRange(8, 32)
         self.min_font.setValue(config.min_font_px)
-        self.opacity = QDoubleSpinBox()
-        self.opacity.setRange(0.6, 1.0)
-        self.opacity.setSingleStep(0.05)
-        self.opacity.setValue(config.overlay_opacity)
 
         self.region_button = QPushButton("Pick region")
         self.region_button.clicked.connect(self.on_pick_region)
@@ -91,7 +86,6 @@ class ControlWindow(QWidget):
         form.addRow("", self.region_button)
         form.addRow("", self.region_label)
         form.addRow("Min font px", self.min_font)
-        form.addRow("Overlay opacity", self.opacity)
         form.addRow("", self.start_button)
         form.addRow("Status", self.status_label)
 
@@ -153,7 +147,6 @@ class ControlWindow(QWidget):
         cfg.capture_fps = self.fps.value()
         cfg.region_mode = self.mode.currentText()
         cfg.min_font_px = self.min_font.value()
-        cfg.overlay_opacity = self.opacity.value()
         keys = dict(cfg.keys)
         if self.gemini_key.text().strip():
             keys["gemini"] = self.gemini_key.text().strip()
@@ -168,4 +161,5 @@ class ControlWindow(QWidget):
         if self.on_close is not None:
             self.on_close()
         super().closeEvent(event)
+
 

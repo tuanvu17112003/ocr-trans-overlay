@@ -1,11 +1,11 @@
-"""Fit translated text inside the source rectangle."""
+﻿"""Fit translated text inside the source rectangle."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Protocol
 
-from .geometry import Rect, intersects
+from .geometry import Rect
 
 
 class Measure(Protocol):
@@ -70,7 +70,6 @@ def fit_text(
     *,
     line_px: int = 0,
     min_font_px: int = 12,
-    obstacles: Sequence[Rect] = (),
 ) -> FitResult:
     """Size from the source line height, shrink inside the box, then ellipsize.
 
@@ -86,14 +85,11 @@ def fit_text(
     def rect_for(height: int) -> Rect:
         return Rect(source.x, source.y, width, max(1, min(max_h, height)))
 
-    def blocked(rect: Rect) -> bool:
-        return any(intersects(rect, obstacle) for obstacle in obstacles)
-
     for font in range(base_font, min_font_px - 1, -1):
         lines = _wrap(text, width, font, measure)
         height = len(lines) * measure.line_height(font)
         rect = rect_for(height)
-        if height <= max_h and not blocked(rect):
+        if height <= max_h:
             return FitResult(rect, font, lines, False)
 
     font = min_font_px
@@ -106,3 +102,5 @@ def fit_text(
         lines[-1] = _ellipsize(lines[-1], width, font, measure)
     height = len(lines) * line_h
     return FitResult(rect_for(height), font, lines, truncated)
+
+

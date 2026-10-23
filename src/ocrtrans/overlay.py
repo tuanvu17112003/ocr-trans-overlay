@@ -1,4 +1,4 @@
-"""Click-through overlay window that paints translated text over the source."""
+﻿"""Click-through overlay window that paints translated text over the source."""
 
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ WS_EX_TOOLWINDOW = 0x00000080
 
 @dataclass
 class _Layout:
-    item: RenderItem
     cover: Rect
     rect: Rect
     font_px: int
@@ -165,7 +164,6 @@ class OverlayWindow(QWidget):
             log.warning("block %s truncated at the font floor", item.block_id)
         y = inner.y + max(0, (inner.h - fit.rect.h) // 2)
         return _Layout(
-            item=item,
             cover=item.rect,
             rect=Rect(inner.x, y, fit.rect.w, fit.rect.h),
             font_px=fit.font_px,
@@ -181,7 +179,6 @@ class OverlayWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         bg = QColor(self.config.bg_color)
-        bg.setAlphaF(self.config.overlay_opacity)
         fg = QColor(self.config.text_color)
         dpr = self.dpr
 
@@ -211,3 +208,5 @@ class OverlayWindow(QWidget):
                 )
             painter.restore()
         painter.end()
+
+

@@ -90,6 +90,7 @@ class OverlayState:
             if view.state != "stable":
                 block = self._blocks.get(view.block_id)
                 if block is not None and _norm(block.source) != _norm(view.source_text):
+                    block.source = view.source_text
                     block.translated = ""
                 continue
             block = self._blocks.get(view.block_id)
