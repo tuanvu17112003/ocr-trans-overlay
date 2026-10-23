@@ -1,4 +1,4 @@
-from ocrtrans.capture import Health
+﻿from ocrtrans.capture import Health
 from ocrtrans.geometry import Rect
 from ocrtrans.lifecycle import OverlayState
 from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent, RenderItem
@@ -46,7 +46,7 @@ def test_crop_scan_does_not_miss_other_blocks():
     )
     for t in (0.07, 0.14):
         s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "A2")], observed_block_ids=[1]), t)
-    assert s.state(2) == "shown"
+    assert s.state(2) != "hidden"
 
 
 def test_translation_result_never_counts_as_missing():
@@ -60,22 +60,15 @@ def test_translation_result_never_counts_as_missing():
 def test_skip_event_never_clears():
     s = OverlayState()
     s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO")]), 0.0)
+    s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "XIN CHAO", "HELLO")]), 0.05)
     for t in (1.0, 5.0, 9.0):
         assert s.on_event(ev(EventKind.SKIP), t)
-
-
-def test_stale_text_hidden_after_cap():
-    s = OverlayState(stale_cap_s=1.0)
-    s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "OLD")]), 0.0)
-    s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "CŨ", "OLD")]), 0.05)
-    s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "NEW")]), 0.1)
-    assert s.on_event(ev(EventKind.SKIP), 0.9)
-    assert s.on_event(ev(EventKind.SKIP), 1.2) == []
 
 
 def test_capture_health_freezes_then_hides():
     s = OverlayState(unhealthy_hold_s=1.0)
     s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "A")]), 0.0)
+    s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "A", "A")]), 0.05)
     assert s.on_event(ev(EventKind.CAPTURE_HEALTH, health=Health.RECREATING), 0.5)
     assert s.on_event(ev(EventKind.CAPTURE_HEALTH, health=Health.RECREATING), 1.6) == []
 
@@ -83,6 +76,7 @@ def test_capture_health_freezes_then_hides():
 def test_reset_clears_and_older_epoch_ignored():
     s = OverlayState()
     s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "NEW")], epoch=2), 0.0)
+    s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "MOI", "NEW")], epoch=2), 0.05)
     assert s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "OLD")], epoch=1), 0.1)
     assert s.on_event(ev(EventKind.RESET, reason="scene_cut", epoch=2), 0.2) == []
 
@@ -101,4 +95,24 @@ def test_render_keeps_source_line_height():
     s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "XIN CHAO", source="HELLO")]), 0.1)
     rendered = s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO", line_px=18)]), 0.2)
     assert rendered[0].line_px == 18
+
+
+
+def test_old_translation_disappears_when_source_changes():
+    s = OverlayState()
+    s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO")]), 0.0)
+    s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "XIN CHAO", source="HELLO")]), 0.1)
+    assert len(s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO")]), 0.2)) == 1
+    assert s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO THERE")]), 0.3) == []
+
+
+def test_block_stays_hidden_until_its_translation_arrives():
+    s = OverlayState()
+    assert s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO")]), 0.0) == []
+    rendered = s.on_event(
+        ev(EventKind.TRANSLATION_RESULT, items=[item(1, "XIN CHAO", source="HELLO")]), 0.1
+    )
+    assert [r.text for r in rendered] == ["XIN CHAO"]
+
+
 

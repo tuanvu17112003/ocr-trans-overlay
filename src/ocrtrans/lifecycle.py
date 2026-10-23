@@ -1,4 +1,4 @@
-"""Overlay lifecycle: which translated blocks stay on screen, and when they go."""
+﻿"""Overlay lifecycle: which translated blocks stay on screen, and when they go."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ from .capture import Health
 from .pipeline import EventKind, PipelineEvent, RenderItem
 
 
+def _norm(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
 @dataclass
 class _Block:
     block_id: int
@@ -15,7 +19,6 @@ class _Block:
     source: str = ""
     translated: str = ""
     miss: int = 0
-    stale_since: float | None = None
     state: str = "shown"
     line_px: int = 0
 
@@ -23,11 +26,9 @@ class _Block:
 class OverlayState:
     def __init__(
         self,
-        stale_cap_s: float = 1.0,
         miss_passes: int = 2,
         unhealthy_hold_s: float = 1.0,
     ) -> None:
-        self.stale_cap_s = stale_cap_s
         self.miss_passes = miss_passes
         self.unhealthy_hold_s = unhealthy_hold_s
         self._blocks: dict[int, _Block] = {}
@@ -44,7 +45,7 @@ class OverlayState:
             return "hidden"
         if block.state == "hidden":
             return "hidden"
-        if block.stale_since is not None:
+        if not block.translated:
             return "pending"
         return "shown"
 
@@ -88,15 +89,15 @@ class OverlayState:
         for view in event.blocks:
             if view.state != "stable":
                 block = self._blocks.get(view.block_id)
-                if block is not None and block.source != view.source_text:
-                    block.stale_since = now
+                if block is not None and _norm(block.source) != _norm(view.source_text):
+                    block.translated = ""
                 continue
             block = self._blocks.get(view.block_id)
             if block is None:
                 block = _Block(block_id=view.block_id, rect=view.rect)
                 self._blocks[view.block_id] = block
-            elif block.source != view.source_text:
-                block.stale_since = now
+            elif _norm(block.source) != _norm(view.source_text):
+                block.translated = ""
             block.rect = view.rect
             block.source = view.source_text
             block.line_px = view.line_px
@@ -118,10 +119,9 @@ class OverlayState:
     def _on_translation(self, event: PipelineEvent) -> None:
         for item in event.items:
             block = self._blocks.get(item.block_id)
-            if block is None or block.source != item.source_text:
+            if block is None or _norm(block.source) != _norm(item.source_text):
                 continue  # translation for text that is no longer on screen
             block.translated = item.text
-            block.stale_since = None
             block.state = "shown"
 
     # ---- rendering --------------------------------------------------------
@@ -129,15 +129,12 @@ class OverlayState:
     def _render(self, now: float) -> list[RenderItem]:
         items: list[RenderItem] = []
         for block in self._blocks.values():
-            if block.state == "hidden":
-                continue
-            if block.stale_since is not None and now - block.stale_since >= self.stale_cap_s:
-                block.state = "hidden"
+            if block.state == "hidden" or not block.translated:
                 continue
             items.append(
                 RenderItem(
                     block_id=block.block_id,
-                    text=block.translated or block.source,
+                    text=block.translated,
                     rect=block.rect,
                     source_text=block.source,
                     cached=False,
@@ -145,3 +142,4 @@ class OverlayState:
                 )
             )
         return items
+
