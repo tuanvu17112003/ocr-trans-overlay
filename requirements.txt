@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu130
+numpy
+opencv-python
+windows-capture==2.0.1
+rapidocr
+onnxruntime-gpu
+torch==2.14.1+cu130
+transformers<5
+sentencepiece
+requests
+PyQt6
+pytest
