@@ -71,7 +71,12 @@ class DxgiBackend:
 class WgcBackend:
     """Windows Graphics Capture of one window or monitor, latest frame kept."""
 
-    def __init__(self, window_name: str | None = None, monitor_index: int | None = None) -> None:
+    def __init__(
+        self,
+        window_name: str | None = None,
+        monitor_index: int | None = None,
+        window_hwnd: int | None = None,
+    ) -> None:
         from windows_capture import WindowsCapture
 
         self._latest: np.ndarray | None = None
@@ -79,8 +84,9 @@ class WgcBackend:
         self._capture = WindowsCapture(
             cursor_capture=False,
             draw_border=False,
-            window_name=window_name,
-            monitor_index=monitor_index if window_name is None else None,
+            window_name=window_name if window_hwnd is None else None,
+            window_hwnd=window_hwnd,
+            monitor_index=monitor_index if (window_name is None and window_hwnd is None) else None,
         )
 
         @self._capture.event
