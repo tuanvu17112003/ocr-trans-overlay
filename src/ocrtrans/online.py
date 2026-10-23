@@ -148,6 +148,8 @@ class GeminiEngine(_OnlineBase):
 class OnlineRouter:
     """Primary online engine, cooldown on quota errors, local fallback."""
 
+    kind: Literal["online"] = "online"
+
     def __init__(
         self,
         primary: Engine,
@@ -158,6 +160,16 @@ class OnlineRouter:
         self.local_fallback = local_fallback
         self.cooldown_s = cooldown_s
         self._cooldown_until = 0.0
+
+    @property
+    def name(self) -> str:
+        return self.primary.name
+
+    def load(self) -> None:
+        pass
+
+    def unload(self) -> None:
+        pass
 
     @property
     def healthy(self) -> bool:

@@ -145,6 +145,7 @@ class TranslationService:
         self.fallback = fallback
         self._lock = threading.Lock()
         self._in_flight = 0
+        self.degraded = False
 
     def translate(self, text: str) -> tuple[str, bool]:
         key = normalize(text)
@@ -152,17 +153,18 @@ class TranslationService:
             return "", False
         cached = self.cache.get(key)
         if cached is not None:
+            self.degraded = False
             return cached, True
 
         with self._lock:
             self._in_flight += 1
         try:
             try:
-                result = self.engine.translate([key])[0]
+                result = self._call(self.engine, key)
             except Exception:  # noqa: BLE001 - online failure falls back to local
                 if self.fallback is None:
                     raise
-                result = self.fallback.translate([key])[0]
+                result = self._call(self.fallback, key)
         finally:
             with self._lock:
                 self._in_flight -= 1
@@ -170,6 +172,14 @@ class TranslationService:
         result = result.strip()
         self.cache.put(key, result)
         return result, False
+
+    def _call(self, engine: Engine, text: str) -> str:
+        out = engine.translate([text])
+        if isinstance(out, tuple):  # OnlineRouter returns (text, degraded)
+            self.degraded = bool(out[1])
+            return out[0]
+        self.degraded = False
+        return out[0]
 
     def switch(self, engine: Engine) -> None:
         with self._lock:

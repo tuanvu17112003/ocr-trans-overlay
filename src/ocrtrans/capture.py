@@ -31,22 +31,34 @@ class DxgiBackend:
     """Desktop Duplication. HDR screens return rgba16f, so always to_bgr()."""
 
     def __init__(self, monitor_index: int | None = None) -> None:
-        from windows_capture import DxgiDuplicationSession
+        self._monitor_index = monitor_index
+        self._session = None
+        self._closed = False
 
-        self._session = DxgiDuplicationSession(monitor_index=monitor_index)
+    def _ensure(self):
+        # DXGI sessions are thread-affine: create on the capture thread.
+        if self._session is None:
+            from windows_capture import DxgiDuplicationSession
+
+            self._session = DxgiDuplicationSession(monitor_index=self._monitor_index)
+        return self._session
 
     def grab(self, rect: Rect) -> np.ndarray | None:
-        frame = self._session.acquire_frame(timeout_ms=33)
+        session = self._ensure()
+        frame = session.acquire_frame(timeout_ms=33)
         if frame is None:
             return None
         img = frame.to_bgr()
         return img[rect.y : rect.bottom, rect.x : rect.right]
 
     def recreate(self) -> None:
-        self._session.recreate()
+        if self._session is not None:
+            self._session.recreate()
 
     def close(self) -> None:
-        del self._session
+        # Native DXGI sessions cannot be dropped off their creating thread;
+        # the process is exiting, so let the OS reclaim it.
+        self._closed = True
 
 
 class WgcBackend:
