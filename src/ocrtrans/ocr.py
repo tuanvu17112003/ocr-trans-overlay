@@ -37,6 +37,7 @@ def group_blocks(
     boxes: list[Box],
     max_gap_ratio: float = 0.6,
     min_confidence: float = 0.6,
+    max_lines: int = 4,
 ) -> list[Block]:
     """Merge text lines that sit under each other into paragraph blocks."""
     kept = [b for b in boxes if b.confidence >= min_confidence and b.text.strip()]
@@ -49,6 +50,8 @@ def group_blocks(
     for box in kept:
         placed = False
         for group in groups:
+            if len(group) >= max_lines:
+                continue
             last = group[-1]
             gap = box.rect.y - last.rect.bottom
             same_column = abs(box.rect.x - group[0].rect.x) <= 2 * line_h

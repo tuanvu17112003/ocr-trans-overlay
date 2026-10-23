@@ -29,3 +29,13 @@ def test_start_button_calls_callback(qapp):
     window.start_button.click()
     assert calls == ["start"]
     window.close()
+
+
+def test_stop_button_calls_stop_when_running(qapp):
+    calls: list = []
+    window = make_window(Config(), calls)
+    window.start_button.click()
+    window.start_button.click()
+    assert calls == ["start", "stop"]
+    window.close()
+

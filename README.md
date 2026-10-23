@@ -37,17 +37,20 @@ OCR models ship inside the `rapidocr` wheel (PP-OCRv6 det/rec small).
 run.bat
 ```
 
-or `.venv\Scripts\python -m ocrtrans.app`.
+or `.venv\Scripts\python -m ocrtrans.app`. The control window opens with every setting:
+engine, keys, stability profile, fps, region mode and picker, minimum font, overlay
+opacity, plus Start/Stop and live status (engine, capture health, OCR passes, queues,
+p50/p95). Nothing is downloaded or captured until Start. Closing the window quits.
 
 ## Hotkeys
 
 | Keys | Action |
 |---|---|
-| `Ctrl+Alt+Z` | pause / resume translation |
+| `Ctrl+Alt+Z` | start / stop translation |
 | `Ctrl+Alt+R` | drag a new capture region |
 | `Ctrl+Alt+M` | cycle region mode (single / multi / whole monitor) |
 | `Ctrl+Alt+H` | toggle the performance HUD |
-| `Ctrl+Alt+S` | settings |
+| `Ctrl+Alt+S` | raise the control window |
 | `Ctrl+Alt+Q` | quit |
 
 Settings and regions are stored in `%LOCALAPPDATA%\OCRTrans\config.json`; logs in
@@ -68,12 +71,17 @@ Online engines are off by default and require the consent checkbox in settings. 
 provider returns 429/401 the router cools it down for 60 s and uses NLLB when
 `fallback_to_local` is on.
 
-## Measured (RTX 3080, 2560x1440 HDR, replay harness)
+## Measured (RTX 3080, 2560x1440 HDR)
+
+Replay harness:
 
 | Engine | OCR p50 | MT p50 | end-to-end p50 | p95 |
 |---|---|---|---|---|
-| nllb | 180 ms | 31 ms | 214 ms | 717 ms |
-| envit5 | 174 ms | 59 ms | 237 ms | 424 ms |
+| nllb | 211 ms | 46 ms | 263 ms | 835 ms |
+| envit5 | 210 ms | 72 ms | 286 ms | 500 ms |
+
+Real Gunfire Reborn window (WGC, settings screen, 15 s): OCR p50 265 ms / p95 404 ms,
+translation p50 126 ms / p95 328 ms, 11 OCR passes, no queue backlog.
 
 OCR over 30 rendered lines: mean text similarity 0.961, exact 0.767. Numbers preserved
 98.75%, proper nouns 88.75% (NLLB) / 87.5% (EnViT5) on the 80-line corpus.
@@ -102,10 +110,21 @@ Run the harness yourself:
 - Region rectangles are stored as fractions of the monitor, so they survive resolution
   changes; a >2% aspect change is reported by `remap()`.
 - Multi-monitor capture uses the union rectangle of the selected regions.
+- Translated text is sized from the source line height and never painted outside the
+  source box: long Vietnamese shrinks to the font floor, then ends with an ellipsis
+  (logged) instead of covering neighbouring text.
+- NLLB-600M still mistranslates short game labels out of context. Paragraph grouping
+  helps; it is not a substitute for a glossary or a stronger model.
+- The overlay only paints blocks that stay stable for 2-3 OCR passes, so a typewriter
+  dialogue appears on the first stable pass, not while it is still animating.
 
 ## Tests
 
 ```bat
-.venv\Scripts\python -m pytest -q          :: unit tests (GPU tests skipped)
-.venv\Scripts\python -m pytest -m gpu -q   :: CUDA model tests
+.venv\Scripts\python -m pytest -q                     :: unit tests
+.venv\Scripts\python -m pytest -m gpu -q              :: CUDA model tests
+.venv\Scripts\python -m pytest -m real tests/real --run-real -q   :: real game, needs it open
 ```
+
+The real suite captures the running Gunfire Reborn window, runs real OCR and NLLB, and
+fails if a pipeline thread dies. Without `--run-real` (or with the game closed) it skips.

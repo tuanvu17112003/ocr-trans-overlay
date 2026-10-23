@@ -17,6 +17,7 @@ class _Block:
     miss: int = 0
     stale_since: float | None = None
     state: str = "shown"
+    line_px: int = 0
 
 
 class OverlayState:
@@ -98,6 +99,7 @@ class OverlayState:
                 block.stale_since = now
             block.rect = view.rect
             block.source = view.source_text
+            block.line_px = view.line_px
             block.miss = 0
             block.state = "shown"
 
@@ -139,6 +141,7 @@ class OverlayState:
                     rect=block.rect,
                     source_text=block.source,
                     cached=False,
+                    line_px=block.line_px,
                 )
             )
         return items

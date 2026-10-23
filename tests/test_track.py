@@ -92,3 +92,11 @@ def test_grown_paragraph_keeps_its_id():
     assert len(blocks) == 1
     assert blocks[0].id == first
 
+
+
+def test_two_boxes_do_not_share_one_block():
+    t = TemporalTracker()
+    t.observe([Box(Rect(0, 0, 200, 60), "A B", 0.9)], 0.0)
+    t.observe([Box(Rect(0, 0, 200, 20), "A", 0.9), Box(Rect(0, 40, 200, 20), "B", 0.9)], 0.07)
+    assert len(t.blocks()) == 2
+

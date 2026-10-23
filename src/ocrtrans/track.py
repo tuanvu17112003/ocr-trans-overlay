@@ -47,16 +47,17 @@ def _normalize(text: str) -> str:
     return " ".join(text.lower().split())
 
 
-def _match(a: Rect, b: Rect) -> bool:
-    """Same block when IoU is decent or one rect mostly contains the other."""
-    if iou(a, b) >= 0.5:
-        return True
+def _match_score(a: Rect, b: Rect) -> float:
+    """IoU, with a floor for containment (a paragraph that grows a line)."""
+    score = iou(a, b)
+    if score >= 0.5:
+        return score
     inter_w = min(a.right, b.right) - max(a.x, b.x)
     inter_h = min(a.bottom, b.bottom) - max(a.y, b.y)
     if inter_w <= 0 or inter_h <= 0:
-        return False
-    smaller = min(a.w * a.h, b.w * b.h)
-    return smaller > 0 and (inter_w * inter_h) / smaller >= 0.7
+        return score
+    covers = inter_w / min(a.w, b.w) >= 0.9 and inter_h / min(a.h, b.h) >= 0.9
+    return 0.6 if covers else score
 
 
 def _locked(method):
@@ -202,11 +203,13 @@ class TemporalTracker:
         """scope limits which blocks may be counted missing (crop scans)."""
         matched: set[int] = set()
         for box in boxes:
-            best = None
+            best, best_score = None, 0.5
             for block in self._blocks:
-                if _match(block.rect, box.rect):
-                    best = block
-                    break
+                if block.id in matched:
+                    continue
+                score = _match_score(block.rect, box.rect)
+                if score > best_score:
+                    best, best_score = block, score
             if best is None:
                 best = TrackBlock(id=self._next_id, rect=box.rect)
                 self._next_id += 1

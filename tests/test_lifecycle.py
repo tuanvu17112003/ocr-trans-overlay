@@ -4,12 +4,25 @@ from ocrtrans.lifecycle import OverlayState
 from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent, RenderItem
 
 
-def item(block_id, text, source="X"):
-    return RenderItem(block_id=block_id, text=text, rect=Rect(0, 0, 10, 10), source_text=source, cached=False)
+def item(block_id, text, source="X", line_px=0):
+    return RenderItem(
+        block_id=block_id,
+        text=text,
+        rect=Rect(0, 0, 10, 10),
+        source_text=source,
+        cached=False,
+        line_px=line_px,
+    )
 
 
-def block(block_id, text, state="stable"):
-    return BlockView(block_id=block_id, rect=Rect(0, 0, 10, 10), source_text=text, state=state)
+def block(block_id, text, state="stable", line_px=0):
+    return BlockView(
+        block_id=block_id,
+        rect=Rect(0, 0, 10, 10),
+        source_text=text,
+        state=state,
+        line_px=line_px,
+    )
 
 
 def ev(kind, epoch=1, **kw):
@@ -79,4 +92,13 @@ def test_pending_block_is_not_rendered():
     out = s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HEL", state="pending")]), 0.0)
     assert out == []
     assert s.state(1) == "hidden"
+
+
+
+def test_render_keeps_source_line_height():
+    s = OverlayState()
+    s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO", line_px=18)]), 0.0)
+    s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "XIN CHAO", source="HELLO")]), 0.1)
+    rendered = s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HELLO", line_px=18)]), 0.2)
+    assert rendered[0].line_px == 18
 

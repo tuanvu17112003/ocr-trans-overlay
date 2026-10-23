@@ -113,8 +113,12 @@ class ControlWindow(QWidget):
         self.consent.setEnabled(online)
 
     def _toggle(self) -> None:
-        self.set_running(True)
-        self.on_start()
+        if self.running:
+            self.set_running(False)
+            self.on_stop()
+        else:
+            self.set_running(True)
+            self.on_start()
 
     def set_running(self, running: bool) -> None:
         self.running = running

@@ -48,3 +48,11 @@ def test_gpu_read_recovers_rendered_sentence():
     boxes = engine.read(frame)
     text = " ".join(b.text for b in boxes).lower()
     assert "gate" in text and "traveler" in text
+
+
+def test_grouping_stops_at_four_lines():
+    boxes = [Box(Rect(10, 10 + i * 18, 200, 16), f"line {i}", 0.9) for i in range(6)]
+    blocks = group_blocks(boxes)
+    assert len(blocks) == 2
+    assert len(blocks[0].lines) == 4
+
