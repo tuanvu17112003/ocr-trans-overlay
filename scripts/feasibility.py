@@ -212,8 +212,9 @@ def check_self_capture():
     hwnd = int(win.winId())
     session = DxgiDuplicationSession()
 
-    def grab_count_magenta(seconds: float = 1.2) -> float:
+    def grab_count_magenta(seconds: float = 1.2, mode: str = "max") -> float:
         best = -1.0
+        last = -1.0
         deadline = time.perf_counter() + seconds
         while time.perf_counter() < deadline:
             frame = session.acquire_frame(timeout_ms=300)
@@ -221,15 +222,17 @@ def check_self_capture():
                 continue
             img = frame.to_bgr()
             magenta = (img[:, :, 0] > 200) & (img[:, :, 2] > 200) & (img[:, :, 1] < 60)
-            best = max(best, float(magenta.mean()))
+            last = float(magenta.mean())
+            best = max(best, last)
             time.sleep(0.1)
-        return best
+        return last if mode == "last" else best
 
     before = grab_count_magenta()
     ok = ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-    app.processEvents()
-    time.sleep(0.3)
-    after = grab_count_magenta()
+    for _ in range(10):
+        app.processEvents()
+        time.sleep(0.1)
+    after = grab_count_magenta(mode="last")
     win.close()
     app.processEvents()
 
