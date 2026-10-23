@@ -13,6 +13,7 @@ from typing import Callable, Literal, Protocol
 import numpy as np
 
 from .capture import CaptureManager, Health
+from .exclusion import AffinityGate
 from .geometry import Rect, union_all
 from .track import BlockState, Decision, TemporalTracker, TrackBlock
 from .translate import Engine, TranslationCache, TranslationService
@@ -59,16 +60,6 @@ class ExclusionGate(Protocol):
     def acquire(self, deadline_ms: int = 8) -> bool: ...
 
     def release(self) -> None: ...
-
-
-class AffinityGate:
-    """No-op gate: WDA_EXCLUDEFROMCAPTURE already hides the overlay."""
-
-    def acquire(self, deadline_ms: int = 8) -> bool:
-        return True
-
-    def release(self) -> None:
-        pass
 
 
 class _Latest:
