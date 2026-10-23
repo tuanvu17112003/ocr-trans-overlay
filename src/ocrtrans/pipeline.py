@@ -1,0 +1,397 @@
+"""Capture -> OCR -> translate pipeline with epoch cancellation."""
+
+from __future__ import annotations
+
+import threading
+import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Callable, Literal, Protocol
+
+import numpy as np
+
+from .capture import CaptureManager, Health
+from .geometry import Rect, union_all
+from .track import BlockState, Decision, TemporalTracker, TrackBlock
+from .translate import Engine, TranslationCache, TranslationService
+
+
+class EventKind(str, Enum):
+    OCR_RESULT = "ocr_result"
+    TRANSLATION_RESULT = "translation_result"
+    SKIP = "skip"
+    CAPTURE_HEALTH = "capture_health"
+    RESET = "reset"
+
+
+@dataclass
+class BlockView:
+    block_id: int
+    rect: Rect
+    source_text: str
+    state: Literal["pending", "stable"]
+
+
+@dataclass
+class RenderItem:
+    block_id: int
+    text: str
+    rect: Rect
+    source_text: str
+    cached: bool
+
+
+@dataclass
+class PipelineEvent:
+    kind: EventKind
+    epoch: int
+    at: float
+    blocks: list[BlockView] = field(default_factory=list)
+    observed_block_ids: list[int] = field(default_factory=list)
+    items: list[RenderItem] = field(default_factory=list)
+    health: Health | None = None
+    reason: str = ""
+
+
+class ExclusionGate(Protocol):
+    def acquire(self, deadline_ms: int = 8) -> bool: ...
+
+    def release(self) -> None: ...
+
+
+class AffinityGate:
+    """No-op gate: WDA_EXCLUDEFROMCAPTURE already hides the overlay."""
+
+    def acquire(self, deadline_ms: int = 8) -> bool:
+        return True
+
+    def release(self) -> None:
+        pass
+
+
+class _Latest:
+    """Depth-1 newest-wins slot."""
+
+    def __init__(self) -> None:
+        self._item = None
+        self._cv = threading.Condition()
+
+    def put(self, item) -> None:
+        with self._cv:
+            self._item = item
+            self._cv.notify()
+
+    def take(self, timeout: float = 0.05):
+        with self._cv:
+            if self._item is None:
+                self._cv.wait(timeout)
+            item, self._item = self._item, None
+            return item
+
+    def clear(self) -> None:
+        with self._cv:
+            self._item = None
+
+    def qsize(self) -> int:
+        with self._cv:
+            return 0 if self._item is None else 1
+
+
+class _LatestPerKey:
+    """Depth-1 newest-wins slot per block id."""
+
+    def __init__(self) -> None:
+        self._items: OrderedDict[int, object] = OrderedDict()
+        self._cv = threading.Condition()
+
+    def put(self, key: int, item) -> None:
+        with self._cv:
+            self._items[key] = item
+            self._items.move_to_end(key)
+            self._cv.notify()
+
+    def take(self, timeout: float = 0.05):
+        with self._cv:
+            if not self._items:
+                self._cv.wait(timeout)
+            if not self._items:
+                return None
+            return self._items.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._cv:
+            self._items.clear()
+
+    def qsize(self) -> int:
+        with self._cv:
+            return len(self._items)
+
+
+class Pipeline:
+    def __init__(
+        self,
+        capture: CaptureManager,
+        ocr,
+        tracker: TemporalTracker,
+        service: TranslationService,
+        emit: Callable[[PipelineEvent], None],
+        gate: ExclusionGate | None = None,
+        fps: int = 15,
+        clock=time.monotonic,
+    ) -> None:
+        self.capture = capture
+        self.ocr = ocr
+        self.tracker = tracker
+        self.service = service
+        self.emit = emit
+        self.gate = gate
+        self.fps = fps
+        self.clock = clock
+
+        self.epoch = 0
+        self.enabled = True
+        self._regions: list[Rect] = []
+        self._running = False
+        self._threads: list[threading.Thread] = []
+        self._ocr_queue = _Latest()
+        self._mt_queue = _LatestPerKey()
+        self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="http")
+        self._pending_engine: Engine | None = None
+        self._switch_lock = threading.Lock()
+        self._last_mt: dict[int, tuple[str, int]] = {}
+
+        self._ocr_passes = 0
+        self._exclusion_missed = 0
+        self._fit_truncated = 0
+        self._inflight = 0
+
+    # ---- public API -------------------------------------------------------
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._threads = [
+            threading.Thread(target=self._capture_loop, name="capture", daemon=True),
+            threading.Thread(target=self._ocr_loop, name="ocr", daemon=True),
+            threading.Thread(target=self._mt_loop, name="mt", daemon=True),
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def stop(self, timeout: float = 2.0) -> None:
+        if not self._running:
+            return
+        self._running = False
+        self.epoch += 1
+        self._ocr_queue.clear()
+        self._mt_queue.clear()
+        for thread in self._threads:
+            thread.join(timeout)
+        self._pool.shutdown(wait=False, cancel_futures=True)
+
+    def set_regions(self, rects: list[Rect]) -> None:
+        self._regions = list(rects)
+        self.epoch += 1
+        self._ocr_queue.clear()
+        self._mt_queue.clear()
+        self._last_mt.clear()
+        self.tracker.reset()
+        self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
+
+    def set_engine(self, engine: Engine) -> None:
+        self.epoch += 1
+        self._pending_engine = engine
+        self._mt_queue.clear()
+        self._last_mt.clear()
+        self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
+
+    def set_enabled(self, enabled: bool) -> None:
+        self.enabled = enabled
+        self.epoch += 1
+        self._ocr_queue.clear()
+        self._mt_queue.clear()
+        self.emit(
+            PipelineEvent(
+                kind=EventKind.RESET,
+                epoch=self.epoch,
+                at=self.clock(),
+                reason="enabled" if enabled else "disabled",
+            )
+        )
+
+    def stats(self) -> dict:
+        return {
+            "ocr_passes": self._ocr_passes,
+            "ocr_queue": self._ocr_queue.qsize(),
+            "mt_queue": self._mt_queue.qsize(),
+            "inflight": self._inflight,
+            "epoch": self.epoch,
+            "fit_truncated": self._fit_truncated,
+            "exclusion_missed": self._exclusion_missed,
+        }
+
+    # ---- capture ----------------------------------------------------------
+
+    def _region(self) -> Rect:
+        return union_all(self._regions) if self._regions else Rect(0, 0, 1920, 1080)
+
+    def _sleep_rest(self, started: float) -> None:
+        remaining = (1.0 / self.fps) - (self.clock() - started)
+        if remaining > 0:
+            time.sleep(remaining)
+
+    def _capture_loop(self) -> None:
+        while self._running:
+            started = self.clock()
+            if not self.enabled:
+                time.sleep(0.05)
+                continue
+            gate = self.gate
+            if gate is not None and not gate.acquire():
+                self._exclusion_missed += 1
+                self._sleep_rest(started)
+                continue
+            try:
+                frame, health = self.capture.grab(self._region())
+            finally:
+                if gate is not None:
+                    gate.release()
+            if frame is None:
+                self._sleep_rest(started)
+                continue
+            if health is not Health.OK:
+                self.tracker.reset()
+                self.emit(
+                    PipelineEvent(
+                        kind=EventKind.CAPTURE_HEALTH,
+                        epoch=self.epoch,
+                        at=self.clock(),
+                        health=health,
+                    )
+                )
+                self._sleep_rest(started)
+                continue
+
+            decision = self.tracker.update(frame, self.clock())
+            if decision.skip:
+                self.emit(PipelineEvent(kind=EventKind.SKIP, epoch=self.epoch, at=self.clock()))
+            else:
+                self._ocr_queue.put((self.epoch, frame, decision))
+            self._sleep_rest(started)
+
+    # ---- OCR --------------------------------------------------------------
+
+    def _ocr_loop(self) -> None:
+        while self._running:
+            task = self._ocr_queue.take()
+            if task is None:
+                continue
+            epoch, frame, decision = task
+            if epoch != self.epoch or not self.enabled:
+                continue
+            try:
+                blocks, observed = self._run_ocr(frame, decision)
+            except Exception:  # noqa: BLE001 - OCR failure must not kill the loop
+                continue
+            if epoch != self.epoch:
+                continue
+            self._ocr_passes += 1
+            views = [
+                BlockView(
+                    block_id=block.id,
+                    rect=block.rect,
+                    source_text=block.text,
+                    state="stable" if block.state is BlockState.STABLE else "pending",
+                )
+                for block in blocks
+            ]
+            self.emit(
+                PipelineEvent(
+                    kind=EventKind.OCR_RESULT,
+                    epoch=epoch,
+                    at=self.clock(),
+                    blocks=views,
+                    observed_block_ids=observed,
+                )
+            )
+            for block in blocks:
+                if block.state is BlockState.STABLE and block.text.strip():
+                    self._submit_mt(block, epoch)
+
+    def _run_ocr(self, frame: np.ndarray, decision: Decision) -> tuple[list[TrackBlock], list[int]]:
+        if decision.full_detect:
+            boxes = self.ocr.read(frame)
+            blocks = self.tracker.observe(boxes, self.clock())
+            return blocks, [block.id for block in blocks]
+        rects = [rect for _, rect in decision.crops]
+        boxes = self.ocr.read(frame, rects)
+        observed = [block_id for block_id, _ in decision.crops]
+        blocks = self.tracker.observe(boxes, self.clock(), scope=set(observed))
+        return blocks, observed
+
+    # ---- translation ------------------------------------------------------
+
+    def _submit_mt(self, block: TrackBlock, epoch: int) -> None:
+        key = (block.text, epoch)
+        if self._last_mt.get(block.id) == key:
+            return
+        self._last_mt[block.id] = key
+        self._mt_queue.put(block.id, (epoch, block.text, block.rect))
+
+    def _mt_loop(self) -> None:
+        while self._running:
+            self._maybe_switch()
+            task = self._mt_queue.take()
+            if task is None:
+                continue
+            block_id, (epoch, text, rect) = task
+            if epoch != self.epoch or not self.enabled:
+                continue
+            if getattr(self.service.engine, "kind", "local") == "online":
+                self._pool.submit(self._translate, block_id, epoch, text, rect)
+            else:
+                self._translate(block_id, epoch, text, rect)
+
+    def _translate(self, block_id: int, epoch: int, text: str, rect: Rect) -> None:
+        self._inflight += 1
+        try:
+            result, cached = self.service.translate(text)
+        except Exception:  # noqa: BLE001 - provider errors are degraded, not fatal
+            return
+        finally:
+            self._inflight -= 1
+        self._maybe_switch()
+        if epoch != self.epoch or not self.enabled:
+            return
+        self.emit(
+            PipelineEvent(
+                kind=EventKind.TRANSLATION_RESULT,
+                epoch=epoch,
+                at=self.clock(),
+                items=[
+                    RenderItem(
+                        block_id=block_id,
+                        text=result,
+                        rect=rect,
+                        source_text=text,
+                        cached=cached,
+                    )
+                ],
+            )
+        )
+
+    def _maybe_switch(self) -> None:
+        with self._switch_lock:
+            engine = self._pending_engine
+            if engine is None:
+                return
+            try:
+                self.service.switch(engine)
+            except RuntimeError:
+                return  # still translating; retry on the next loop tick
+            self._pending_engine = None
+            # translations are engine-specific
+            self.service.cache = TranslationCache()

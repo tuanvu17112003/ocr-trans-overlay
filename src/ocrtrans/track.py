@@ -160,7 +160,13 @@ class TemporalTracker:
 
     # ---- OCR results ------------------------------------------------------
 
-    def observe(self, boxes: list[Box], now: float) -> list[TrackBlock]:
+    def observe(
+        self,
+        boxes: list[Box],
+        now: float,
+        scope: set[int] | None = None,
+    ) -> list[TrackBlock]:
+        """scope limits which blocks may be counted missing (crop scans)."""
         matched: set[int] = set()
         for box in boxes:
             best, best_iou = None, 0.5
@@ -178,7 +184,7 @@ class TemporalTracker:
         for block in self._blocks:
             if block.id in matched:
                 block.miss_count = 0
-            else:
+            elif scope is None or block.id in scope:
                 block.miss_count += 1
                 if block.miss_count >= 2:
                     block.state = BlockState.GONE
