@@ -1,0 +1,80 @@
+{"id": "dlg1", "category": "dialogue", "text": "Open the gate, traveler.", "ref_vi": "Mở cổng đi, lữ khách."}
+{"id": "dlg2", "category": "dialogue", "text": "We must leave before dawn.", "ref_vi": "Chúng ta phải rời đi trước bình minh."}
+{"id": "dlg3", "category": "dialogue", "text": "You are not welcome here.", "ref_vi": "Ngươi không được chào đón ở đây."}
+{"id": "dlg4", "category": "dialogue", "text": "The king will see you now.", "ref_vi": "Nhà vua sẽ gặp ngươi ngay bây giờ."}
+{"id": "dlg5", "category": "dialogue", "text": "I have waited a long time.", "ref_vi": "Ta đã đợi rất lâu rồi."}
+{"id": "dlg6", "category": "dialogue", "text": "Do not trust the merchant.", "ref_vi": "Đừng tin tên thương nhân."}
+{"id": "dlg7", "category": "dialogue", "text": "Take this and go.", "ref_vi": "Cầm lấy thứ này và đi đi."}
+{"id": "dlg8", "category": "dialogue", "text": "We will meet again.", "ref_vi": "Chúng ta sẽ gặp lại."}
+{"id": "qst1", "category": "quest", "text": "Find the lost sword in the cave.", "ref_vi": "Tìm thanh kiếm thất lạc trong hang động."}
+{"id": "qst2", "category": "quest", "text": "Speak to the village elder.", "ref_vi": "Nói chuyện với trưởng làng."}
+{"id": "qst3", "category": "quest", "text": "Collect 5 herbs from the forest.", "ref_vi": "Thu thập 5 loại thảo mộc trong rừng."}
+{"id": "qst4", "category": "quest", "text": "Return to the captain.", "ref_vi": "Quay lại chỗ đội trưởng."}
+{"id": "qst5", "category": "quest", "text": "Defeat the bandit leader.", "ref_vi": "Đánh bại thủ lĩnh bọn cướp."}
+{"id": "qst6", "category": "quest", "text": "Escort the caravan safely.", "ref_vi": "Hộ tống đoàn xe an toàn."}
+{"id": "qst7", "category": "quest", "text": "Search the ruins for clues.", "ref_vi": "Tìm manh mối trong khu tàn tích."}
+{"id": "qst8", "category": "quest", "text": "Repair the bridge before sunset.", "ref_vi": "Sửa cây cầu trước khi mặt trời lặn."}
+{"id": "itm1", "category": "item", "text": "Health Potion restores 50 HP.", "ref_vi": "Thuốc hồi máu hồi phục 50 HP."}
+{"id": "itm2", "category": "item", "text": "Iron Sword deals 12 damage.", "ref_vi": "Kiếm sắt gây 12 sát thương."}
+{"id": "itm3", "category": "item", "text": "Ancient Key opens the vault.", "ref_vi": "Chìa khóa cổ mở kho bạc."}
+{"id": "itm4", "category": "item", "text": "Silver Ring grants +5 defense.", "ref_vi": "Nhẫn bạc tăng +5 phòng thủ."}
+{"id": "itm5", "category": "item", "text": "Rope can be used to climb.", "ref_vi": "Dây thừng có thể dùng để leo."}
+{"id": "itm6", "category": "item", "text": "Torch burns for 10 minutes.", "ref_vi": "Đuốc cháy trong 10 phút."}
+{"id": "itm7", "category": "item", "text": "Map of the Northern Realm.", "ref_vi": "Bản đồ vùng Bắc Giới."}
+{"id": "itm8", "category": "item", "text": "Elixir of Speed lasts 30 seconds.", "ref_vi": "Thuốc tăng tốc kéo dài 30 giây."}
+{"id": "skl1", "category": "skill", "text": "Fireball explodes on impact.", "ref_vi": "Cầu lửa phát nổ khi va chạm."}
+{"id": "skl2", "category": "skill", "text": "Heal restores health over time.", "ref_vi": "Hồi máu phục hồi máu theo thời gian."}
+{"id": "skl3", "category": "skill", "text": "Dash moves you forward quickly.", "ref_vi": "Lướt đi đưa bạn tiến lên nhanh chóng."}
+{"id": "skl4", "category": "skill", "text": "Shield blocks the next attack.", "ref_vi": "Khiên chặn đòn tấn công tiếp theo."}
+{"id": "skl5", "category": "skill", "text": "Frost slows enemies.", "ref_vi": "Băng giá làm chậm kẻ địch."}
+{"id": "skl6", "category": "skill", "text": "Arrow Rain hits all targets.", "ref_vi": "Mưa Tên đánh trúng mọi mục tiêu."}
+{"id": "skl7", "category": "skill", "text": "Shadow Step teleports behind.", "ref_vi": "Bước Bóng dịch chuyển ra phía sau."}
+{"id": "skl8", "category": "skill", "text": "Rally boosts ally damage.", "ref_vi": "Cổ Vũ tăng sát thương đồng minh."}
+{"id": "cmb1", "category": "combat_log", "text": "You hit the wolf for 8 damage.", "ref_vi": "Bạn đánh sói 8 sát thương."}
+{"id": "cmb2", "category": "combat_log", "text": "The wolf misses you.", "ref_vi": "Sói đánh trượt bạn."}
+{"id": "cmb3", "category": "combat_log", "text": "Critical hit! 24 damage.", "ref_vi": "Chí mạng! 24 sát thương."}
+{"id": "cmb4", "category": "combat_log", "text": "You are poisoned.", "ref_vi": "Bạn đã bị trúng độc."}
+{"id": "cmb5", "category": "combat_log", "text": "The enemy is stunned.", "ref_vi": "Kẻ địch đã bị choáng."}
+{"id": "cmb6", "category": "combat_log", "text": "You gained 15 experience.", "ref_vi": "Bạn nhận được 15 kinh nghiệm."}
+{"id": "cmb7", "category": "combat_log", "text": "Your shield broke.", "ref_vi": "Khiên của bạn đã vỡ."}
+{"id": "cmb8", "category": "combat_log", "text": "The goblin flees.", "ref_vi": "Yêu tinh bỏ chạy."}
+{"id": "men1", "category": "menu", "text": "Continue Game", "ref_vi": "Tiếp tục trò chơi"}
+{"id": "men2", "category": "menu", "text": "New Game", "ref_vi": "Trò chơi mới"}
+{"id": "men3", "category": "menu", "text": "Load Game", "ref_vi": "Tải trò chơi"}
+{"id": "men4", "category": "menu", "text": "Settings", "ref_vi": "Cài đặt"}
+{"id": "men5", "category": "menu", "text": "Quit", "ref_vi": "Thoát"}
+{"id": "men6", "category": "menu", "text": "Save", "ref_vi": "Lưu"}
+{"id": "men7", "category": "menu", "text": "Audio Options", "ref_vi": "Tùy chọn âm thanh"}
+{"id": "men8", "category": "menu", "text": "Return to Main Menu", "ref_vi": "Trở về menu chính"}
+{"id": "tip1", "category": "tooltip", "text": "Hold to charge the attack.", "ref_vi": "Giữ để nạp đòn tấn công."}
+{"id": "tip2", "category": "tooltip", "text": "Requires level 10.", "ref_vi": "Yêu cầu cấp 10."}
+{"id": "tip3", "category": "tooltip", "text": "Cannot be used in combat.", "ref_vi": "Không thể dùng khi giao chiến."}
+{"id": "tip4", "category": "tooltip", "text": "Right click to equip.", "ref_vi": "Nhấp chuột phải để trang bị."}
+{"id": "tip5", "category": "tooltip", "text": "Increases movement speed.", "ref_vi": "Tăng tốc độ di chuyển."}
+{"id": "tip6", "category": "tooltip", "text": "Only works at night.", "ref_vi": "Chỉ hoạt động vào ban đêm."}
+{"id": "tip7", "category": "tooltip", "text": "Consumes one charge.", "ref_vi": "Tiêu hao một lần nạp."}
+{"id": "tip8", "category": "tooltip", "text": "Talk to the blacksmith.", "ref_vi": "Nói chuyện với thợ rèn."}
+{"id": "lor1", "category": "lore", "text": "Long ago the dragons ruled the sky.", "ref_vi": "Từ lâu lắm rồi, loài rồng thống trị bầu trời."}
+{"id": "lor2", "category": "lore", "text": "The empire fell in a single night.", "ref_vi": "Đế chế sụp đổ trong một đêm."}
+{"id": "lor3", "category": "lore", "text": "Four stones guard the ancient seal.", "ref_vi": "Bốn viên đá canh giữ phong ấn cổ."}
+{"id": "lor4", "category": "lore", "text": "The river remembers every name.", "ref_vi": "Dòng sông nhớ mọi cái tên."}
+{"id": "lor5", "category": "lore", "text": "No one returns from the Deep.", "ref_vi": "Không ai trở về từ Vực Sâu."}
+{"id": "lor6", "category": "lore", "text": "The prophet spoke of a child.", "ref_vi": "Nhà tiên tri đã nói về một đứa trẻ."}
+{"id": "lor7", "category": "lore", "text": "Steel was forged in dragon fire.", "ref_vi": "Thép được rèn trong lửa rồng."}
+{"id": "lor8", "category": "lore", "text": "The old gods sleep beneath the mountain.", "ref_vi": "Các vị thần cũ ngủ dưới ngọn núi."}
+{"id": "num1", "category": "numbers", "text": "You have 3 HP left.", "ref_vi": "Bạn còn 3 HP."}
+{"id": "num2", "category": "numbers", "text": "Deal 250 damage in 10 seconds.", "ref_vi": "Gây 250 sát thương trong 10 giây."}
+{"id": "num3", "category": "numbers", "text": "Cost: 120 gold.", "ref_vi": "Giá: 120 vàng."}
+{"id": "num4", "category": "numbers", "text": "Level 42 required.", "ref_vi": "Yêu cầu cấp 42."}
+{"id": "num5", "category": "numbers", "text": "Survive for 90 seconds.", "ref_vi": "Sống sót trong 90 giây."}
+{"id": "num6", "category": "numbers", "text": "Gain 2.5% critical chance.", "ref_vi": "Tăng 2.5% tỉ lệ chí mạng."}
+{"id": "num7", "category": "numbers", "text": "Party of 4 players.", "ref_vi": "Nhóm 4 người chơi."}
+{"id": "num8", "category": "numbers", "text": "Cooldown: 12 seconds.", "ref_vi": "Hồi chiêu: 12 giây."}
+{"id": "pn1", "category": "proper_nouns", "text": "Arthur draws the sword.", "ref_vi": "Arthur rút thanh kiếm."}
+{"id": "pn2", "category": "proper_nouns", "text": "Merlin waits by the lake.", "ref_vi": "Merlin đợi bên hồ."}
+{"id": "pn3", "category": "proper_nouns", "text": "The city of Aldoria is burning.", "ref_vi": "Thành phố Aldoria đang cháy."}
+{"id": "pn4", "category": "proper_nouns", "text": "Queen Elara sends her regards.", "ref_vi": "Nữ hoàng Elara gửi lời hỏi thăm."}
+{"id": "pn5", "category": "proper_nouns", "text": "Travel to Mount Varn.", "ref_vi": "Đi đến Núi Varn."}
+{"id": "pn6", "category": "proper_nouns", "text": "The Order of Dawn is here.", "ref_vi": "Hội Bình Minh đã đến."}
+{"id": "pn7", "category": "proper_nouns", "text": "Lord Draven holds the keep.", "ref_vi": "Lãnh chúa Draven giữ thành."}
+{"id": "pn8", "category": "proper_nouns", "text": "Follow the road to Silvermere.", "ref_vi": "Đi theo con đường đến Silvermere."}
