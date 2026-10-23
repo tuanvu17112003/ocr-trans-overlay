@@ -8,8 +8,8 @@ def item(block_id, text, source="X"):
     return RenderItem(block_id=block_id, text=text, rect=Rect(0, 0, 10, 10), source_text=source, cached=False)
 
 
-def block(block_id, text):
-    return BlockView(block_id=block_id, rect=Rect(0, 0, 10, 10), source_text=text, state="stable")
+def block(block_id, text, state="stable"):
+    return BlockView(block_id=block_id, rect=Rect(0, 0, 10, 10), source_text=text, state=state)
 
 
 def ev(kind, epoch=1, **kw):
@@ -72,3 +72,11 @@ def test_reset_clears_and_older_epoch_ignored():
     s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "NEW")], epoch=2), 0.0)
     assert s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "OLD")], epoch=1), 0.1)
     assert s.on_event(ev(EventKind.RESET, reason="scene_cut", epoch=2), 0.2) == []
+
+
+def test_pending_block_is_not_rendered():
+    s = OverlayState()
+    out = s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HEL", state="pending")]), 0.0)
+    assert out == []
+    assert s.state(1) == "hidden"
+

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import difflib
+import functools
+import threading
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -44,6 +46,15 @@ def _normalize(text: str) -> str:
     return " ".join(text.lower().split())
 
 
+def _locked(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+
+    return wrapper
+
+
 class TemporalTracker:
     def __init__(
         self,
@@ -75,10 +86,17 @@ class TemporalTracker:
         self._pass = 0
         self._passes_since_detect = 0
         self._last_full = 0.0
+        self._lock = threading.RLock()
 
+    def set_profile(self, profile: str) -> None:
+        with self._lock:
+            self.window = STABILITY_WINDOWS.get(profile, 3)
+
+    @_locked
     def blocks(self) -> list[TrackBlock]:
         return [b for b in self._blocks if b.state is not BlockState.GONE]
 
+    @_locked
     def reset(self) -> None:
         self._blocks.clear()
         self._prev = None
@@ -96,6 +114,7 @@ class TemporalTracker:
             frame = cv2.resize(frame, (320, max(1, round(h * 320 / w))), interpolation=cv2.INTER_AREA)
         return cv2.GaussianBlur(frame, (5, 5), 0)
 
+    @_locked
     def update(self, frame: np.ndarray, now: float) -> Decision:
         self._pass += 1
         gray = self._gray(frame)
@@ -160,6 +179,7 @@ class TemporalTracker:
 
     # ---- OCR results ------------------------------------------------------
 
+    @_locked
     def observe(
         self,
         boxes: list[Box],

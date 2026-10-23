@@ -94,7 +94,13 @@ class SlowEngine:
         return [self.prefix + t for t in texts]
 
 
-def pipeline_with(engine=None, ocr=None, tracker_returns_crop=False, tracker_returns_skip=False):
+def pipeline_with(
+    engine=None,
+    ocr=None,
+    tracker_returns_crop=False,
+    tracker_returns_skip=False,
+    region=None,
+):
     events = []
     engine = engine or FastEngine()
     p = Pipeline(
@@ -105,7 +111,7 @@ def pipeline_with(engine=None, ocr=None, tracker_returns_crop=False, tracker_ret
         emit=events.append,
         fps=60,
     )
-    p.set_regions([Rect(0, 0, 200, 100)])
+    p.set_regions([region or Rect(0, 0, 200, 100)])
     p.events = lambda: events
 
     def wait_event(pred, timeout=2.0):
@@ -177,4 +183,12 @@ def test_epoch_cancel_clears_queue():
     p.start()
     p.set_enabled(False)
     assert p.stats()["mt_queue"] == 0
+    p.stop()
+
+
+def test_emitted_rects_are_screen_coordinates():
+    p = pipeline_with(region=Rect(100, 50, 200, 100))
+    p.start()
+    event = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
+    assert event.blocks[0].rect == Rect(100, 50, 50, 12)
     p.stop()

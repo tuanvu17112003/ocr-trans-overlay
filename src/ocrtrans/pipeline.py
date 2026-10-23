@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import OrderedDict
@@ -18,6 +19,13 @@ from .geometry import Rect, union_all
 from .stats import LatencyStats
 from .track import BlockState, Decision, TemporalTracker, TrackBlock
 from .translate import Engine, TranslationCache, TranslationService
+
+log = logging.getLogger(__name__)
+
+
+def _offset(rect: Rect, origin: Rect) -> Rect:
+    """Region-relative tracker rect -> screen rect."""
+    return Rect(rect.x + origin.x, rect.y + origin.y, rect.w, rect.h)
 
 
 class EventKind(str, Enum):
@@ -283,7 +291,7 @@ class Pipeline:
             if decision.skip:
                 self.emit(PipelineEvent(kind=EventKind.SKIP, epoch=self.epoch, at=self.clock()))
             else:
-                self._ocr_queue.put((self.epoch, frame, decision))
+                self._ocr_queue.put((self.epoch, frame, decision, self._region()))
             self._sleep_rest(started)
 
     # ---- OCR --------------------------------------------------------------
@@ -293,7 +301,7 @@ class Pipeline:
             task = self._ocr_queue.take()
             if task is None:
                 continue
-            epoch, frame, decision = task
+            epoch, frame, decision, origin = task
             if epoch != self.epoch or not self.enabled:
                 continue
             try:
@@ -308,7 +316,7 @@ class Pipeline:
             views = [
                 BlockView(
                     block_id=block.id,
-                    rect=block.rect,
+                    rect=_offset(block.rect, origin),
                     source_text=block.text,
                     state="stable" if block.state is BlockState.STABLE else "pending",
                 )
@@ -325,7 +333,7 @@ class Pipeline:
             )
             for block in blocks:
                 if block.state is BlockState.STABLE and block.text.strip():
-                    self._submit_mt(block, epoch)
+                    self._submit_mt(block, epoch, origin)
 
     def _run_ocr(self, frame: np.ndarray, decision: Decision) -> tuple[list[TrackBlock], list[int]]:
         if decision.full_detect:
@@ -344,12 +352,12 @@ class Pipeline:
 
     # ---- translation ------------------------------------------------------
 
-    def _submit_mt(self, block: TrackBlock, epoch: int) -> None:
+    def _submit_mt(self, block: TrackBlock, epoch: int, origin: Rect) -> None:
         key = (block.text, epoch)
         if self._last_mt.get(block.id) == key:
             return
         self._last_mt[block.id] = key
-        self._mt_queue.put(block.id, (epoch, block.text, block.rect))
+        self._mt_queue.put(block.id, (epoch, block.text, _offset(block.rect, origin)))
 
     def _mt_loop(self) -> None:
         while self._running:
@@ -404,6 +412,10 @@ class Pipeline:
                 self.service.switch(engine)
             except RuntimeError:
                 return  # still translating; retry on the next loop tick
+            except Exception:  # noqa: BLE001 - a broken model must not kill the MT thread
+                log.exception("engine switch failed")
+                self._pending_engine = None
+                return
             self._pending_engine = None
             # translations are engine-specific
             self.service.cache = TranslationCache()

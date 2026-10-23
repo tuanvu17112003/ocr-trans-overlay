@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import cv2
 
 from .geometry import Box, Rect, union_all
 
@@ -102,10 +103,11 @@ class RapidOcrEngine:
         img = frame
         if self.downscale_width and frame.shape[1] > self.downscale_width:
             scale = self.downscale_width / frame.shape[1]
-            img = frame[
-                : max(1, round(frame.shape[0] * scale)),
-                : self.downscale_width,
-            ]
+            img = cv2.resize(
+                frame,
+                (self.downscale_width, max(1, round(frame.shape[0] * scale))),
+                interpolation=cv2.INTER_AREA,
+            )
         out = self._engine(img, use_det=True, use_cls=False, use_rec=True)
         return self._to_boxes(out, scale)
 

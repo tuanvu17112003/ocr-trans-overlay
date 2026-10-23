@@ -186,8 +186,8 @@ class TranslationService:
             if self._in_flight:
                 raise RuntimeError("engine busy")
             old = self.engine
-        if old is not engine:
-            old.unload()
-            _empty_cuda_cache()
-            engine.load()
-        self.engine = engine
+            if old is not engine:
+                old.unload()
+                _empty_cuda_cache()
+                engine.load()
+            self.engine = engine

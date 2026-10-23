@@ -13,7 +13,7 @@ import requests
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
-from .capture import CaptureManager, DxgiBackend
+from .capture import CaptureManager, DxgiBackend, WgcBackend
 from .config import Config, load_config, save_config
 from .exclusion import AffinityGate
 from .geometry import Rect
@@ -91,7 +91,7 @@ def main() -> int:
     events: queue.Queue = queue.Queue()
     overlay = OverlayWindow(screen, cfg, events)
     service = TranslationService(build_engine(cfg), TranslationCache())
-    capture = CaptureManager(DxgiBackend())
+    capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
     pipeline = Pipeline(
         capture,
         RapidOcrEngine(),
@@ -150,6 +150,7 @@ def main() -> int:
 
     def apply_settings(new_cfg: Config) -> None:
         pipeline.fps = new_cfg.capture_fps
+        pipeline.tracker.set_profile(new_cfg.stability_profile)
         pipeline.set_engine(build_engine(new_cfg))
         new_rects = RegionSet.from_config(new_cfg, screen)
         pipeline.set_regions(new_rects)

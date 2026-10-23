@@ -85,10 +85,15 @@ class WgcBackend:
         def on_closed() -> None:
             pass
 
-        self._thread = threading.Thread(target=self._capture.start, daemon=True)
-        self._thread.start()
+        self._thread: threading.Thread | None = None
+
+    def _ensure_started(self) -> None:
+        if self._thread is None:
+            self._thread = threading.Thread(target=self._capture.start, daemon=True)
+            self._thread.start()
 
     def grab(self, rect: Rect) -> np.ndarray | None:
+        self._ensure_started()
         with self._lock:
             img = self._latest
         if img is None:

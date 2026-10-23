@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import threading
 from ctypes import wintypes
 from typing import Callable
+
+log = logging.getLogger(__name__)
 
 MOD_ALT = 0x0001
 MOD_CONTROL = 0x0002
@@ -71,6 +74,8 @@ class HotkeyManager:
         for index, (name, (mods, vk)) in enumerate(self._bindings.items(), start=1):
             if user32.RegisterHotKey(None, index, mods | MOD_NOREPEAT, vk):
                 registered[index] = name
+            else:
+                log.warning("hotkey %r could not be registered (already in use?)", name)
         self._ready.set()
 
         message = wintypes.MSG()

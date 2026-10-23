@@ -95,6 +95,8 @@ Run the harness yourself:
   overlay is a separate top-level window and hotkeys use `RegisterHotKey`. Some
   competitive games still disallow overlays; check their rules.
 - **API keys are stored in plaintext** in `config.json`.
+- A capture region that stays nearly black for 3 frames (letterbox, night scene, DRM) is
+  treated as `BLACK`: the overlay freezes, then hides, and capture falls back to WGC.
 - The overlay hides itself from capture with `WDA_EXCLUDEFROMCAPTURE`; the hide-and-ack
   fallback exists for machines where affinity is ignored, and trips after 3 timeouts.
 - Region rectangles are stored as fractions of the monitor, so they survive resolution

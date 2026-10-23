@@ -85,6 +85,11 @@ class OverlayState:
     def _on_ocr(self, event: PipelineEvent, now: float) -> None:
         present = {view.block_id for view in event.blocks}
         for view in event.blocks:
+            if view.state != "stable":
+                block = self._blocks.get(view.block_id)
+                if block is not None and block.source != view.source_text:
+                    block.stale_since = now
+                continue
             block = self._blocks.get(view.block_id)
             if block is None:
                 block = _Block(block_id=view.block_id, rect=view.rect)

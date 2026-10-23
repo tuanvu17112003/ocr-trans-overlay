@@ -22,6 +22,21 @@ def test_confidence_filter_drops_noise():
 
 
 @pytest.mark.gpu
+def test_downscale_reads_full_width_and_maps_boxes():
+    img = Image.new("RGB", (2000, 200), (18, 18, 22))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 44)
+    draw.text((1000, 70), "Open the gate", font=font, fill=(240, 240, 240))
+    frame = np.array(img)[:, :, ::-1].copy()
+
+    engine = RapidOcrEngine(use_cuda=True, downscale_width=1000)
+    boxes = engine.read(frame)
+    text = " ".join(b.text for b in boxes).lower()
+    assert "gate" in text
+    assert max(b.rect.x for b in boxes) > 900
+
+
+@pytest.mark.gpu
 def test_gpu_read_recovers_rendered_sentence():
     img = Image.new("RGB", (800, 200), (18, 18, 22))
     draw = ImageDraw.Draw(img)

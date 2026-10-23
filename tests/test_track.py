@@ -65,3 +65,13 @@ def test_growth_resets_stability():
     t.observe([Box(Rect(10, 10, 100, 20), "HELLO THERE", 0.9)], 0.21)
     t.observe([Box(Rect(10, 10, 100, 20), "HELLO THERE", 0.9)], 0.28)
     assert t.blocks()[0].state == BlockState.STABLE
+
+
+def test_set_profile_changes_stability_window():
+    t = TemporalTracker(profile="safe")
+    t.set_profile("fast")
+    box = Box(Rect(10, 10, 100, 20), "A", 0.9)
+    t.observe([box], 0.0)
+    t.observe([box], 0.07)
+    assert t.blocks()[0].state is BlockState.STABLE
+
