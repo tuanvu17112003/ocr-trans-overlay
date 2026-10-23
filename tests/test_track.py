@@ -100,3 +100,11 @@ def test_two_boxes_do_not_share_one_block():
     t.observe([Box(Rect(0, 0, 200, 20), "A", 0.9), Box(Rect(0, 40, 200, 20), "B", 0.9)], 0.07)
     assert len(t.blocks()) == 2
 
+
+def test_static_screen_without_text_skips_between_full_detects():
+    t = TemporalTracker("safe")
+    frame = np.zeros((100, 120, 3), np.uint8)
+    assert t.update(frame, 0.0).full_detect
+    t.observe([], 0.0)
+    decisions = [t.update(frame, 0.06 * index) for index in range(1, 8)]
+    assert all(decision.skip for decision in decisions)

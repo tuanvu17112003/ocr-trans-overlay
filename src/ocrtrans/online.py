@@ -169,7 +169,9 @@ class OnlineRouter:
         pass
 
     def unload(self) -> None:
-        pass
+        for engine in (self.primary, self.local_fallback):
+            if engine is not None:
+                engine.unload()
 
     @property
     def healthy(self) -> bool:

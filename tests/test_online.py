@@ -48,3 +48,30 @@ def test_429_marks_provider_degraded_for_cooldown():
     out, degraded = router.translate("Hello")
     assert degraded is True and out == "HELLO"
     assert router.healthy is False
+
+from ocrtrans.online import OnlineRouter
+from ocrtrans.translate import TranslationCache
+
+
+class LifecycleEngine:
+    name, kind = "lifecycle", "local"
+
+    def __init__(self):
+        self.unloads = 0
+
+    def load(self):
+        pass
+
+    def unload(self):
+        self.unloads += 1
+
+    def translate(self, texts):
+        return list(texts)
+
+
+def test_router_unload_frees_the_local_fallback():
+    primary, fallback = LifecycleEngine(), LifecycleEngine()
+    router = OnlineRouter(primary, fallback)
+    router.unload()
+    assert primary.unloads == 1
+    assert fallback.unloads == 1

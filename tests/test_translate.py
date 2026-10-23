@@ -113,3 +113,30 @@ def test_translate_many_uses_one_engine_call_and_caches():
     assert first == [("A", False), ("B", False)]
     assert second == [("A", True), ("B", True)]
 
+
+
+class LifecycleEngine:
+    name, kind = "lifecycle", "local"
+
+    def __init__(self):
+        self.loads = 0
+        self.unloads = 0
+
+    def load(self):
+        self.loads += 1
+
+    def unload(self):
+        self.unloads += 1
+
+    def translate(self, texts):
+        return list(texts)
+
+
+def test_switch_does_not_reload_an_already_loaded_engine():
+    old, new = LifecycleEngine(), LifecycleEngine()
+    old.load()
+    new.load()
+    service = TranslationService(old, TranslationCache())
+    service.switch(new)
+    assert new.loads == 1
+    assert old.unloads == 1

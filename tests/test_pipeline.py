@@ -239,3 +239,58 @@ def test_cap_defers_blocks_instead_of_dropping_them():
     p.stop()
     assert len(seen) == 20
 
+
+
+class LifecycleEngine:
+    name, kind = "lifecycle", "local"
+
+    def __init__(self):
+        self.loads = 0
+        self.unloads = 0
+
+    def load(self):
+        self.loads += 1
+
+    def unload(self):
+        self.unloads += 1
+
+    def translate(self, texts):
+        return list(texts)
+
+
+class RaisingOcr:
+    def read(self, frame, rects=None):
+        raise RuntimeError("ocr broke")
+
+
+def test_adopt_engine_frees_the_old_model_without_reloading():
+    old = LifecycleEngine()
+    new = LifecycleEngine()
+    p = pipeline_with(engine=old)
+    old.load()
+    new.load()
+    p.set_enabled(False)
+    p.adopt_engine(new)
+    assert old.unloads == 1
+    assert new.loads == 1
+    p.stop()
+
+
+def test_ocr_failure_is_counted_not_silent():
+    p = pipeline_with(ocr=RaisingOcr())
+    p.start()
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and p.stats()["ocr_errors"] == 0:
+        time.sleep(0.05)
+    stats = p.stats()
+    p.stop()
+    assert stats["ocr_errors"] >= 1
+    assert stats["ocr_passes"] == 0
+
+
+def test_stats_report_how_many_blocks_the_last_pass_found():
+    p = pipeline_with()
+    p.start()
+    assert p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
+    assert p.stats()["blocks"] == 1
+    p.stop()

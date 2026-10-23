@@ -158,10 +158,6 @@ class TemporalTracker:
                 self._passes_since_detect = 0
                 self._last_full = now
                 return Decision(full_detect=True)
-            if not stable and not self._blocks:
-                self._passes_since_detect = 0
-                self._last_full = now
-                return Decision(full_detect=True)
             return Decision(skip=True)
 
         crops: list[tuple[int, Rect]] = []

@@ -242,6 +242,7 @@ class TranslationService:
         return [text.strip() for text in translated]
 
     def switch(self, engine: Engine) -> None:
+        """Swap engines; the caller passes a loaded engine."""
         with self._lock:
             if self._in_flight:
                 raise RuntimeError("engine busy")
@@ -249,5 +250,4 @@ class TranslationService:
             if old is not engine:
                 old.unload()
                 _empty_cuda_cache()
-                engine.load()
             self.engine = engine

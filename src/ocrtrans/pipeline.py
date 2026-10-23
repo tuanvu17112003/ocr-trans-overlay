@@ -1,4 +1,4 @@
-"""Capture -> OCR -> translate pipeline with epoch cancellation."""
+﻿"""Capture -> OCR -> translate pipeline with epoch cancellation."""
 
 from __future__ import annotations
 
@@ -167,6 +167,8 @@ class Pipeline:
         self._known_ids: set[int] = set()
 
         self._ocr_passes = 0
+        self._ocr_errors = 0
+        self._last_blocks = 0
         self._exclusion_missed = 0
         self._fit_truncated = 0
         self._inflight = 0
@@ -216,6 +218,31 @@ class Pipeline:
         self._last_mt.clear()
         self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
 
+    def unload_engine(self) -> None:
+        """Free the current model. Only valid while paused."""
+        if self.enabled:
+            raise RuntimeError("pause the pipeline before unloading the engine")
+        with self._switch_lock:
+            self.service.engine.unload()
+            self._pending_engine = None
+
+    def adopt_engine(self, engine: Engine) -> None:
+        """Install an already-loaded engine after unload_engine()."""
+        with self._switch_lock:
+            old = self.service.engine
+            if old is not engine:
+                old.unload()
+            self.service.engine = engine
+            self.service.cache = TranslationCache()
+            self._pending_engine = None
+        self.epoch += 1
+        self._ocr_queue.clear()
+        self._mt_queue.clear()
+        self._last_mt.clear()
+        self._known_ids.clear()
+        self.tracker.reset()
+        self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
+
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
         self.epoch += 1
@@ -234,6 +261,8 @@ class Pipeline:
     def stats(self) -> dict:
         return {
             "ocr_passes": self._ocr_passes,
+            "ocr_errors": self._ocr_errors,
+            "blocks": self._last_blocks,
             "ocr_queue": self._ocr_queue.qsize(),
             "mt_queue": self._mt_queue.qsize(),
             "inflight": self._inflight,
@@ -312,10 +341,14 @@ class Pipeline:
                 blocks, observed = self._run_ocr(frame, decision)
                 self._ocr_stats.add((self.clock() - started) * 1000, cached=False)
             except Exception:  # noqa: BLE001 - OCR failure must not kill the loop
+                self._ocr_errors += 1
+                if self._ocr_errors == 1 or self._ocr_errors % 100 == 0:
+                    log.exception("OCR pass failed (%d so far)", self._ocr_errors)
                 continue
             if epoch != self.epoch:
                 continue
             self._ocr_passes += 1
+            self._last_blocks = len(blocks)
             views = [
                 BlockView(
                     block_id=block.id,
@@ -495,3 +528,4 @@ class Pipeline:
             self._pending_engine = None
             # translations are engine-specific
             self.service.cache = TranslationCache()
+

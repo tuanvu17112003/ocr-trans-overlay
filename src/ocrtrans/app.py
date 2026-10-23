@@ -100,7 +100,15 @@ def main() -> int:
     def status() -> dict:
         pipeline = state["pipeline"]
         if pipeline is None:
-            return {"engine": cfg.engine, "health": "-", "p50": "-", "p95": "-"}
+            return {
+                "engine": cfg.engine,
+                "health": "-",
+                "p50": "-",
+                "p95": "-",
+                "ocr_passes": 0,
+                "ocr_errors": 0,
+                "blocks": 0,
+            }
         return {
             **pipeline.stats(),
             "engine": state["engine_name"] or cfg.engine,
@@ -109,17 +117,29 @@ def main() -> int:
 
     hud = HudWindow(status)
 
+    def load_engine(config: Config):
+        """Build and load a model, keeping the window responsive and honest."""
+        window.set_status_text("loading model...")
+        QApplication.processEvents()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            return build_engine(config)
+        except Exception as exc:  # noqa: BLE001 - a failed load must not kill the app
+            log.exception("model load failed")
+            window.set_status_text(f"load failed: {exc}")
+            return None
+        finally:
+            QApplication.restoreOverrideCursor()
+
     def start() -> None:
         window.read_config()
         save_config(cfg)
         pipeline = state["pipeline"]
         if pipeline is None:
-            window.set_status_text("loading model...")
-            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-            try:
-                engine = build_engine(cfg)
-            finally:
-                QApplication.restoreOverrideCursor()
+            engine = load_engine(cfg)
+            if engine is None:
+                window.set_running(False)
+                return
             pipeline = Pipeline(
                 capture,
                 RapidOcrEngine(),
@@ -137,12 +157,15 @@ def main() -> int:
             state["engine_name"] = engine.name
         else:
             if state["engine_name"] != cfg.engine:
-                window.set_status_text("switching engine...")
-                QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-                try:
-                    pipeline.set_engine(build_engine(cfg))
-                finally:
-                    QApplication.restoreOverrideCursor()
+                # free the old model before the new one allocates VRAM
+                pipeline.set_enabled(False)
+                pipeline.unload_engine()
+                state["engine_name"] = None
+                engine = load_engine(cfg)
+                if engine is None:
+                    window.set_running(False)
+                    return
+                pipeline.adopt_engine(engine)
                 state["engine_name"] = cfg.engine
             pipeline.fps = cfg.capture_fps
             pipeline.tracker.set_profile(cfg.stability_profile)

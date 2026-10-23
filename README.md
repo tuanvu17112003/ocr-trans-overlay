@@ -117,6 +117,11 @@ Run the harness yourself:
   Vietnamese shrinks to the font floor, then ends with an ellipsis (logged) instead of
   covering neighbouring text.
 - Paragraphs are merged up to 6 lines; two labels on the same row stay separate blocks.
+- A screen with no text is re-scanned about once per stability window instead of every
+  frame, so an empty region does not spin the CPU or flood the log. The status line
+  shows `text N` (blocks found in the last pass) and `err N` (failed OCR passes).
+- Changing the engine while stopped frees the old model before the new one loads, so
+  only one model sits in VRAM. Stop alone keeps the model loaded for a fast restart.
 - NLLB-600M still mistranslates short game labels out of context. Paragraph grouping
   helps; it is not a substitute for a glossary or a stronger model.
 - The overlay only paints blocks that stay stable for 2-3 OCR passes, so a typewriter
