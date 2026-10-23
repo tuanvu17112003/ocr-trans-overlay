@@ -323,9 +323,10 @@ class Pipeline:
 
     def _run_ocr(self, frame: np.ndarray, decision: Decision) -> tuple[list[TrackBlock], list[int]]:
         if decision.full_detect:
+            known = [block.id for block in self.tracker.blocks()]
             boxes = self.ocr.read(frame)
             blocks = self.tracker.observe(boxes, self.clock())
-            return blocks, [block.id for block in blocks]
+            return blocks, sorted(set(known) | {block.id for block in blocks})
         rects = [rect for _, rect in decision.crops]
         boxes = self.ocr.read(frame, rects)
         observed = [block_id for block_id, _ in decision.crops]
