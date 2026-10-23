@@ -153,6 +153,7 @@ class Pipeline:
         self._pending_engine: Engine | None = None
         self._switch_lock = threading.Lock()
         self._last_mt: dict[int, tuple[str, int]] = {}
+        self._known_ids: set[int] = set()
 
         self._ocr_passes = 0
         self._exclusion_missed = 0
@@ -182,6 +183,7 @@ class Pipeline:
         self.epoch += 1
         self._ocr_queue.clear()
         self._mt_queue.clear()
+        self._known_ids.clear()
         for thread in self._threads:
             thread.join(timeout)
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -192,6 +194,7 @@ class Pipeline:
         self._ocr_queue.clear()
         self._mt_queue.clear()
         self._last_mt.clear()
+        self._known_ids.clear()
         self.tracker.reset()
         self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
 
@@ -207,6 +210,7 @@ class Pipeline:
         self.epoch += 1
         self._ocr_queue.clear()
         self._mt_queue.clear()
+        self._known_ids.clear()
         self.emit(
             PipelineEvent(
                 kind=EventKind.RESET,
@@ -325,15 +329,18 @@ class Pipeline:
 
     def _run_ocr(self, frame: np.ndarray, decision: Decision) -> tuple[list[TrackBlock], list[int]]:
         if decision.full_detect:
-            known = [block.id for block in self.tracker.blocks()]
+            known = set(self._known_ids)
             boxes = self.ocr.read(frame)
             blocks = self.tracker.observe(boxes, self.clock())
-            return blocks, sorted(set(known) | {block.id for block in blocks})
-        rects = [rect for _, rect in decision.crops]
-        boxes = self.ocr.read(frame, rects)
-        observed = [block_id for block_id, _ in decision.crops]
-        blocks = self.tracker.observe(boxes, self.clock(), scope=set(observed))
-        return blocks, observed
+            observed = sorted(known | {block.id for block in blocks})
+        else:
+            rects = [rect for _, rect in decision.crops]
+            boxes = self.ocr.read(frame, rects)
+            observed = [block_id for block_id, _ in decision.crops]
+            blocks = self.tracker.observe(boxes, self.clock(), scope=set(observed))
+        self._known_ids = set(observed)
+        seen = set(observed)
+        return [block for block in blocks if block.id in seen], observed
 
     # ---- translation ------------------------------------------------------
 

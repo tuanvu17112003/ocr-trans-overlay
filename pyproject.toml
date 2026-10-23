@@ -16,3 +16,4 @@ where = ["src"]
 [tool.pytest.ini_options]
 markers = ["gpu: requires a CUDA GPU"]
 testpaths = ["tests"]
+addopts = "-m 'not gpu'"
