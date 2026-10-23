@@ -41,10 +41,10 @@ class FakeTracker:
     def observe(self, boxes, now, scope=None):
         if not boxes:
             return []
-        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="X", state=BlockState.STABLE)]
+        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)]
 
     def blocks(self):
-        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="X", state=BlockState.STABLE)]
+        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)]
 
     def reset(self):
         pass
@@ -210,3 +210,32 @@ def test_pipeline_groups_stacked_lines_into_one_block():
     assert len(event.blocks) == 1
     assert event.blocks[0].source_text == "Open the gate traveler."
     p.stop()
+
+
+def _far_boxes(count):
+    return [Box(Rect(10, 10 + index * 40, 100, 20), f"line {index}", 0.9) for index in range(count)]
+
+
+def test_pipeline_emits_one_event_for_a_batch():
+    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
+    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(3)), tracker=tracker)
+    p.start()
+    event = p.wait_event(lambda e: e.kind == EventKind.TRANSLATION_RESULT and len(e.items) == 3)
+    assert event is not None
+    p.stop()
+
+
+def test_cap_defers_blocks_instead_of_dropping_them():
+    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
+    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(20)), tracker=tracker)
+    p.start()
+    seen = set()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and len(seen) < 20:
+        time.sleep(0.05)
+        for event in p.events():
+            if event.kind is EventKind.TRANSLATION_RESULT:
+                seen.update(item.block_id for item in event.items)
+    p.stop()
+    assert len(seen) == 20
+

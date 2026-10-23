@@ -181,6 +181,66 @@ class TranslationService:
         self.degraded = False
         return out[0]
 
+    def translate_many(self, texts: list[str]) -> list[tuple[str, bool]]:
+        """Translate a batch; one engine call for the cache misses."""
+        keys = [normalize(text) for text in texts]
+        results: list[tuple[str, bool] | None] = []
+        missing: list[str] = []
+        for key in keys:
+            if not key:
+                results.append(("", False))
+                continue
+            cached = self.cache.get(key)
+            if cached is not None:
+                results.append((cached, True))
+                continue
+            results.append(None)
+            if key not in missing:
+                missing.append(key)
+
+        mapping: dict[str, str] = {}
+        if missing:
+            translated = self._translate_batch(missing)
+            for key, value in zip(missing, translated):
+                value = value.strip()
+                mapping[key] = value
+                if value:
+                    self.cache.put(key, value)
+
+        return [
+            result if result is not None else (mapping.get(key, ""), False)
+            for key, result in zip(keys, results)
+        ]
+
+    def _translate_batch(self, texts: list[str]) -> list[str]:
+        with self._lock:
+            self._in_flight += 1
+        try:
+            try:
+                return self._call_batch(self.engine, texts)
+            except Exception:  # noqa: BLE001 - online failure falls back to local
+                if self.fallback is None:
+                    return [""] * len(texts)
+                return self._call_batch(self.fallback, texts)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+
+    def _call_batch(self, engine: Engine, texts: list[str]) -> list[str]:
+        if hasattr(engine, "primary"):  # OnlineRouter only accepts a single text
+            out: list[str] = []
+            for text in texts:
+                result = engine.translate(text)
+                if isinstance(result, tuple):
+                    self.degraded = bool(result[1])
+                    out.append(result[0])
+                else:
+                    out.append(result[0])
+            return out
+        translated = engine.translate(texts)
+        self.degraded = False
+        return [text.strip() for text in translated]
+
     def switch(self, engine: Engine) -> None:
         with self._lock:
             if self._in_flight:

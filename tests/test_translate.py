@@ -93,3 +93,23 @@ def test_cache_evicts_least_recently_used():
     assert cache.get("a") == "1"
     assert cache.get("b") is None
     assert cache.stats()["size"] == 2
+
+
+class CountingEngine(FakeEngine):
+    def __init__(self):
+        self.calls = []
+
+    def translate(self, texts):
+        self.calls.append(tuple(texts))
+        return super().translate(texts)
+
+
+def test_translate_many_uses_one_engine_call_and_caches():
+    engine = CountingEngine()
+    service = TranslationService(engine, TranslationCache())
+    first = service.translate_many(["a", "b"])
+    second = service.translate_many(["a", "b"])
+    assert engine.calls == [("a", "b")]
+    assert first == [("A", False), ("B", False)]
+    assert second == [("A", True), ("B", True)]
+

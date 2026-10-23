@@ -335,9 +335,16 @@ class Pipeline:
                     observed_block_ids=observed,
                 )
             )
-            for block in blocks:
-                if block.state is BlockState.STABLE and block.text.strip():
-                    self._submit_mt(block, epoch, origin)
+            candidates = [
+                block
+                for block in blocks
+                if block.state is BlockState.STABLE
+                and len(block.text.strip()) >= 3
+                and self._last_mt.get(block.id) != (block.text, epoch)
+            ]
+            candidates.sort(key=lambda block: block.rect.w * block.rect.h, reverse=True)
+            for block in candidates[:12]:
+                self._submit_mt(block, epoch, origin)
 
     def _run_ocr(self, frame: np.ndarray, decision: Decision) -> tuple[list[TrackBlock], list[int]]:
         if decision.full_detect:
@@ -381,13 +388,65 @@ class Pipeline:
             task = self._mt_queue.take()
             if task is None:
                 continue
-            block_id, (epoch, text, rect, line_px) = task
-            if epoch != self.epoch or not self.enabled:
+            tasks = [task]
+            while len(tasks) < 8:
+                extra = self._mt_queue.take(timeout=0)
+                if extra is None:
+                    break
+                tasks.append(extra)
+            current = [
+                (block_id, payload)
+                for block_id, payload in tasks
+                if payload[0] == self.epoch and self.enabled
+            ]
+            if not current:
                 continue
             if getattr(self.service.engine, "kind", "local") == "online":
-                self._pool.submit(self._translate, block_id, epoch, text, rect, line_px)
+                for block_id, (epoch, text, rect, line_px) in current:
+                    self._pool.submit(self._translate, block_id, epoch, text, rect, line_px)
             else:
-                self._translate(block_id, epoch, text, rect, line_px)
+                self._translate_batch(current)
+
+    def _translate_batch(self, tasks: list[tuple[int, tuple]]) -> None:
+        started = self.clock()
+        self._inflight += len(tasks)
+        try:
+            results = self.service.translate_many([payload[1] for _, payload in tasks])
+        except Exception:  # noqa: BLE001 - provider errors must not kill the loop
+            for block_id, _ in tasks:
+                self._last_mt.pop(block_id, None)
+            return
+        finally:
+            self._inflight -= len(tasks)
+        self._mt_stats.add((self.clock() - started) * 1000, cached=False)
+
+        items: list[RenderItem] = []
+        for (block_id, (epoch, text, rect, line_px)), (result, cached) in zip(tasks, results):
+            if epoch != self.epoch or not self.enabled:
+                continue
+            if not result:
+                self._last_mt.pop(block_id, None)
+                continue
+            items.append(
+                RenderItem(
+                    block_id=block_id,
+                    text=result,
+                    rect=rect,
+                    source_text=text,
+                    cached=cached,
+                    line_px=line_px,
+                )
+            )
+        self._maybe_switch()
+        if items:
+            self.emit(
+                PipelineEvent(
+                    kind=EventKind.TRANSLATION_RESULT,
+                    epoch=self.epoch,
+                    at=self.clock(),
+                    items=items,
+                )
+            )
 
     def _translate(self, block_id: int, epoch: int, text: str, rect: Rect, line_px: int) -> None:
         self._inflight += 1
