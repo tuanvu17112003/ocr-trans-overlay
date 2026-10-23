@@ -15,6 +15,7 @@ import numpy as np
 from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
 from .geometry import Rect, union_all
+from .stats import LatencyStats
 from .track import BlockState, Decision, TemporalTracker, TrackBlock
 from .translate import Engine, TranslationCache, TranslationService
 
@@ -157,6 +158,8 @@ class Pipeline:
         self._exclusion_missed = 0
         self._fit_truncated = 0
         self._inflight = 0
+        self._ocr_stats = LatencyStats()
+        self._mt_stats = LatencyStats()
 
     # ---- public API -------------------------------------------------------
 
@@ -222,6 +225,12 @@ class Pipeline:
             "epoch": self.epoch,
             "fit_truncated": self._fit_truncated,
             "exclusion_missed": self._exclusion_missed,
+            "p50": round(self._mt_stats.percentile(50), 1),
+            "p95": round(self._mt_stats.percentile(95), 1),
+            "ocr_p50": round(self._ocr_stats.percentile(50), 1),
+            "ocr_p95": round(self._ocr_stats.percentile(95), 1),
+            "ocr_saturated": self._ocr_queue.qsize() > 0,
+            "mt_saturated": self._mt_queue.qsize() > 0,
         }
 
     # ---- capture ----------------------------------------------------------
@@ -284,7 +293,9 @@ class Pipeline:
             if epoch != self.epoch or not self.enabled:
                 continue
             try:
+                started = self.clock()
                 blocks, observed = self._run_ocr(frame, decision)
+                self._ocr_stats.add((self.clock() - started) * 1000, cached=False)
             except Exception:  # noqa: BLE001 - OCR failure must not kill the loop
                 continue
             if epoch != self.epoch:
@@ -349,8 +360,10 @@ class Pipeline:
 
     def _translate(self, block_id: int, epoch: int, text: str, rect: Rect) -> None:
         self._inflight += 1
+        started = self.clock()
         try:
             result, cached = self.service.translate(text)
+            self._mt_stats.add((self.clock() - started) * 1000, cached=cached)
         except Exception:  # noqa: BLE001 - provider errors are degraded, not fatal
             return
         finally:

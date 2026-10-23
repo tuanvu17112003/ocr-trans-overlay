@@ -18,6 +18,7 @@ from .config import Config, load_config, save_config
 from .exclusion import AffinityGate
 from .geometry import Rect
 from .hotkeys import HotkeyManager
+from .hud import HudWindow
 from .logging_setup import setup_logging
 from .ocr import RapidOcrEngine
 from .online import DeepLEngine, GeminiEngine, GoogleEngine, MyMemoryEngine, OnlineRouter
@@ -105,6 +106,15 @@ def main() -> int:
     overlay.set_regions(rects)
     pipeline.start()
 
+    hud = HudWindow(
+        lambda: {
+            **pipeline.stats(),
+            "engine": service.engine.name,
+            "health": capture.health.name,
+        }
+    )
+    hud_state = {"visible": False}
+
     actions: queue.Queue = queue.Queue()
     hotkeys = HotkeyManager()
 
@@ -135,7 +145,8 @@ def main() -> int:
             dialog = SettingsDialog(cfg, apply_settings)
             dialog.exec()
         elif action == "hud":
-            pass  # HUD is task 14
+            hud_state["visible"] = not hud_state["visible"]
+            hud.set_visible(hud_state["visible"])
 
     def apply_settings(new_cfg: Config) -> None:
         pipeline.fps = new_cfg.capture_fps
@@ -148,6 +159,7 @@ def main() -> int:
         hotkeys.unregister_all()
         pipeline.stop()
         overlay.close()
+        hud.close()
         capture.close()
 
     try:
