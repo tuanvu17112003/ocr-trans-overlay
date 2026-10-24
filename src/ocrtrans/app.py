@@ -74,11 +74,18 @@ def build_local(name: str):
 
 
 def local_engine(name: str):
-    """Build a local model; without transformers (CPU build) use Argos instead."""
+    """Build a local model; without its runtime (CPU build) use Argos instead."""
     try:
         return build_local(name)
-    except ImportError:
-        log.warning("%s needs transformers; using argos", name, exc_info=True)
+    except ImportError as exc:
+        missing = (getattr(exc, "name", "") or "").split(".")[0]
+        known = {"transformers", "huggingface_hub", "torch", "sentencepiece"}
+        log.warning(
+            "%s needs transformers; using argos (%s)",
+            name,
+            exc,
+            exc_info=missing not in known,
+        )
         from .argos import ArgosEngine
 
         engine = ArgosEngine()
