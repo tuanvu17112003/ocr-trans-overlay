@@ -1,6 +1,14 @@
 from ocrtrans.config import Config
 from ocrtrans.geometry import Rect
-from ocrtrans.regions import NormalizedRegion, RegionSet, clamp_rect, from_physical, remap
+from ocrtrans.regions import (
+    NormalizedRegion,
+    RegionSet,
+    clamp_rect,
+    drag_rect,
+    from_physical,
+    handle_at,
+    remap,
+)
 
 
 def cfg_with(mode: str, regions=None) -> Config:
@@ -55,3 +63,37 @@ def test_region_mode_multi_keeps_order():
         Rect(0, 0, 500, 400),
         Rect(500, 400, 500, 400),
     ]
+
+
+def test_handle_at_finds_each_edge_and_the_body():
+    rect = Rect(100, 100, 200, 100)
+    assert handle_at(rect, (100, 150)) == "w"
+    assert handle_at(rect, (300, 150)) == "e"
+    assert handle_at(rect, (200, 100)) == "n"
+    assert handle_at(rect, (200, 200)) == "s"
+    assert handle_at(rect, (100, 100)) == "nw"
+    assert handle_at(rect, (300, 200)) == "se"
+    assert handle_at(rect, (200, 150)) == "body"
+    assert handle_at(rect, (50, 50)) is None
+
+
+def test_drag_body_moves_the_rect():
+    assert drag_rect(Rect(100, 100, 200, 100), "body", 10, 5, Rect(0, 0, 1000, 1000)) == Rect(
+        110, 105, 200, 100
+    )
+
+
+def test_drag_east_edge_resizes_not_moves():
+    assert drag_rect(Rect(100, 100, 200, 100), "e", 40, 0, Rect(0, 0, 1000, 1000)) == Rect(
+        100, 100, 240, 100
+    )
+
+
+def test_drag_past_the_monitor_clamps():
+    assert drag_rect(Rect(100, 100, 200, 100), "w", -500, 0, Rect(0, 0, 1000, 1000)) == Rect(
+        0, 100, 300, 100
+    )
+
+
+def test_drag_below_the_minimum_keeps_the_minimum():
+    assert drag_rect(Rect(100, 100, 200, 100), "e", -500, 0, Rect(0, 0, 1000, 1000)).w == 16

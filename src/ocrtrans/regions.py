@@ -52,6 +52,56 @@ def clamp_rect(rect: Rect, monitor: Rect, min_size: int = 16) -> Rect:
     return Rect(x, y, w, h)
 
 
+def handle_at(rect: Rect, point: tuple[int, int], tolerance: int = 6) -> str | None:
+    """Name the handle under a screen point: an edge, a corner, body or None."""
+    x, y = point
+    left, right = rect.x, rect.right
+    top, bottom = rect.y, rect.bottom
+    if not (
+        left - tolerance <= x <= right + tolerance and top - tolerance <= y <= bottom + tolerance
+    ):
+        return None
+    near_l, near_r = abs(x - left) <= tolerance, abs(x - right) <= tolerance
+    near_t, near_b = abs(y - top) <= tolerance, abs(y - bottom) <= tolerance
+    if near_t and near_l:
+        return "nw"
+    if near_t and near_r:
+        return "ne"
+    if near_b and near_l:
+        return "sw"
+    if near_b and near_r:
+        return "se"
+    if near_l:
+        return "w"
+    if near_r:
+        return "e"
+    if near_t:
+        return "n"
+    if near_b:
+        return "s"
+    if left <= x <= right and top <= y <= bottom:
+        return "body"
+    return None
+
+
+def drag_rect(
+    rect: Rect, handle: str, dx: int, dy: int, monitor: Rect, min_size: int = 16
+) -> Rect:
+    """Move or resize a rect by a drag delta, staying inside the monitor."""
+    if handle == "body":
+        return clamp_rect(Rect(rect.x + dx, rect.y + dy, rect.w, rect.h), monitor, min_size)
+    left, top, right, bottom = rect.x, rect.y, rect.right, rect.bottom
+    if "w" in handle:
+        left = min(max(monitor.x, left + dx), right - min_size)
+    if "e" in handle:
+        right = max(min(monitor.right, right + dx), left + min_size)
+    if "n" in handle:
+        top = min(max(monitor.y, top + dy), bottom - min_size)
+    if "s" in handle:
+        bottom = max(min(monitor.bottom, bottom + dy), top + min_size)
+    return Rect(left, top, right - left, bottom - top)
+
+
 class RegionSet:
     @staticmethod
     def from_config(cfg: Config, monitor: Rect) -> list[Rect]:
