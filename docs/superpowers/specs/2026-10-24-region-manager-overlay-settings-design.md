@@ -26,6 +26,8 @@ and exposes the overlay appearance settings that already exist in `Config`.
   drag a handle to resize; Enter accepts, Esc cancels.
 - Overlay settings in the window: text color, background color, font family,
   minimum font size, with a live preview inside the window.
+- The control window looks like a finished tool rather than a form: one dark
+  theme, a clear hierarchy, and states for empty, running and error.
 - No opacity setting: the cover must stay opaque so the source text is hidden.
 
 ## Non-goals
@@ -149,6 +151,54 @@ New group in the control window:
 - If the app is running, list changes go through `set_regions`, which already
   creates a new epoch and clears the overlay.
 
+### 6. Look and feel (direction B, chosen from three mockups)
+
+The window is a dark tool, not a generic form. Everything below is one QSS
+sheet applied at startup plus a `QPalette`; no per-widget styles.
+
+**Tokens**
+
+| Token | Value | Use |
+|---|---|---|
+| `bg` | `#12141A` | window |
+| `panel` | `#171A22` | region list, preview frame |
+| `border` | `#242833` | separators, inputs |
+| `text` | `#E7EAF0` | body |
+| `muted` | `#8B93A5` | labels, inactive rows (4.9:1 on `bg`) |
+| `accent` | `#5EE0B0` | selected row, Start, outline of the active region |
+| `danger` | `#FF8F8F` | Delete, errors |
+
+Font Segoe UI 12 px body, 10 px uppercase section labels (`.label`),
+tabular figures for every metric. Spacing 8/12/16, radius 8, border 1 px.
+
+**Layout (single column, ~520 px wide)**
+
+1. Header: title + live status chip (`● running · WGC` / `● stopped`,
+   accent when running, danger on a capture error).
+2. Regions panel: Single/Multi segmented control, the list, then
+   `+ Add` / `Adjust` / `Delete` in one row.
+3. Overlay panel: two color swatch buttons, font combo, min font px, and the
+   live preview painted with the current settings.
+4. Footer: Start/Stop full-width button, then one muted statistics line
+   (`OCR 88 ms · MT 38 ms · 12 pass · 0 err`).
+
+**States**
+
+- Empty list: the panel shows "No region yet — Add one" and Start is disabled.
+- Running: status chip accent, Start becomes Stop, region edits still allowed
+  (they restart the epoch).
+- Capture error / engine error: one danger line under the header, never a
+  modal.
+- Online engine without consent: the consent row stays visible, Start shows a
+  one-line reason instead of a dialog.
+
+**Outline and editor colors** follow the same tokens: active region `accent`
+2 px + numbered badge, inactive (single mode) `muted` dashed, editor handles
+`accent` 12 px squares on a 40% black shade.
+
+**Not doing:** a custom title bar (native Windows chrome stays), an icon set
+or extra dependencies, animations beyond the selection repaint.
+
 ### 7. Known limitation (out of scope)
 
 Coordinates are Qt logical pixels today (`primaryScreen().geometry()`), while
@@ -176,6 +226,7 @@ design.
 
 ## Calls made (check these)
 
+- Look: direction B (dark tool, accent `#5EE0B0`), one QSS sheet, native title bar.
 - Outlines are shown only while the pipeline is stopped (plus a session-only
   "show while running" checkbox); nothing is added to the config for it.
 - Single mode keeps extra regions in the config instead of deleting them, and
