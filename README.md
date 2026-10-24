@@ -49,10 +49,23 @@ run.bat
 ```
 
 or `.venv\Scripts\python -m ocrtrans.app`. The control window opens with every setting:
-engine, keys, stability profile, fps, region mode and picker, minimum font, plus
-Start/Stop and live status (engine, capture health, OCR passes and scan rate, shown/tiled,
+engine, keys, stability profile, fps, the region list, overlay colors/font and
+Start/Stop plus live status (engine, capture health, OCR passes and scan rate, shown/tiled,
 p50/p95).
 Nothing is downloaded or captured until Start. Closing the window quits.
+
+**Regions.** The window lists every saved region with its size. `Add region` drags a new
+one (it is appended, never replaced), `Adjust` opens the selected rectangle with eight
+handles (drag the body to move, a handle to resize, `Enter` applies, `Esc` cancels) and
+`Delete` removes it (disabled when one is left). Selected regions are outlined on screen
+while translation is stopped; a full-screen outline would make the desktop compositor
+recomposite the video, so the outline only covers the rectangles and hides while running
+unless `Show outlines while running` is ticked. In `single` mode only the first region is
+captured; the others stay saved and show as inactive.
+
+**Overlay.** Text color, cover color (opaque, it must hide the source text), font family
+and minimum font size are set in the window with a live preview; there is no opacity
+setting on purpose.
 
 Debug switches (environment variables):
 
@@ -72,8 +85,8 @@ warning with its line/char count.
 | Keys | Action |
 |---|---|
 | `Ctrl+Alt+Z` | start / stop translation |
-| `Ctrl+Alt+R` | drag a new capture region |
-| `Ctrl+Alt+M` | cycle region mode (single / multi / whole monitor) |
+| `Ctrl+Alt+R` | add a capture region (drag a new rectangle) |
+| `Ctrl+Alt+M` | cycle region mode (single / multi) |
 | `Ctrl+Alt+H` | toggle the performance HUD |
 | `Ctrl+Alt+S` | raise the control window |
 | `Ctrl+Alt+Q` | quit |

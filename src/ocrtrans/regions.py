@@ -102,6 +102,27 @@ def drag_rect(
     return Rect(left, top, right - left, bottom - top)
 
 
+def add_region(
+    regions: list[NormalizedRegion], rect: Rect, monitor: Rect, min_size: int = 16
+) -> list[NormalizedRegion]:
+    clamped = clamp_rect(rect, monitor, min_size)
+    return [*regions, from_physical(clamped, monitor)]
+
+
+def replace_region(
+    regions: list[NormalizedRegion], index: int, rect: Rect, monitor: Rect, min_size: int = 16
+) -> list[NormalizedRegion]:
+    out = list(regions)
+    out[index] = from_physical(clamp_rect(rect, monitor, min_size), monitor)
+    return out
+
+
+def remove_region(regions: list[NormalizedRegion], index: int) -> list[NormalizedRegion]:
+    if len(regions) <= 1:
+        return list(regions)
+    return [region for position, region in enumerate(regions) if position != index]
+
+
 class RegionSet:
     @staticmethod
     def from_config(cfg: Config, monitor: Rect) -> list[Rect]:

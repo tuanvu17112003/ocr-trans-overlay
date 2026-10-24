@@ -3,11 +3,14 @@ from ocrtrans.geometry import Rect
 from ocrtrans.regions import (
     NormalizedRegion,
     RegionSet,
+    add_region,
     clamp_rect,
     drag_rect,
     from_physical,
     handle_at,
     remap,
+    remove_region,
+    replace_region,
 )
 
 
@@ -97,3 +100,22 @@ def test_drag_past_the_monitor_clamps():
 
 def test_drag_below_the_minimum_keeps_the_minimum():
     assert drag_rect(Rect(100, 100, 200, 100), "e", -500, 0, Rect(0, 0, 1000, 1000)).w == 16
+
+
+def test_add_region_appends_a_normalized_rect():
+    monitor = Rect(0, 0, 1000, 1000)
+    out = add_region([], Rect(100, 200, 300, 100), monitor)
+    assert len(out) == 1 and out[0].x == 0.1 and out[0].w == 0.3
+
+
+def test_replace_region_keeps_the_order():
+    monitor = Rect(0, 0, 1000, 1000)
+    regions = add_region(add_region([], Rect(0, 0, 100, 50), monitor), Rect(0, 500, 100, 50), monitor)
+    out = replace_region(regions, 1, Rect(0, 600, 200, 50), monitor)
+    assert out[0] == regions[0] and out[1].y == 0.6 and out[1].w == 0.2
+
+
+def test_remove_region_never_empties_the_list():
+    monitor = Rect(0, 0, 1000, 1000)
+    one = add_region([], Rect(0, 0, 100, 50), monitor)
+    assert remove_region(one, 0) == one

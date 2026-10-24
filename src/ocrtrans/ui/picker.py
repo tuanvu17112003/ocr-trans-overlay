@@ -174,5 +174,5 @@ def pick_regions(screen: Rect) -> list[Rect]:
     return RegionPicker(screen).pick()
 
 
-def adjust_region(screen: Rect, rect: Rect) -> Rect | None:
+def adjust_rect(screen: Rect, rect: Rect) -> Rect | None:
     return RegionPicker(screen).adjust(rect)

@@ -26,12 +26,19 @@ from .ocr import RapidOcrEngine
 from .online import DeepLEngine, GeminiEngine, GoogleEngine, MyMemoryEngine, OnlineRouter
 from .overlay import OverlayWindow
 from .pipeline import Pipeline
-from .regions import RegionSet, from_physical
+from .regions import (
+    NormalizedRegion,
+    RegionSet,
+    add_region,
+    remove_region,
+    replace_region,
+    to_physical,
+)
 from .scan import ScanBudget
 from .translate import Envit5Engine, NllbEngine, TranslationCache, TranslationService
 from .ui.control import ControlWindow
 from .ui.outline import RegionOutline
-from .ui.picker import pick_regions
+from .ui.picker import adjust_rect, pick_regions
 from .ui.theme import apply as apply_theme
 
 log = logging.getLogger(__name__)
@@ -184,6 +191,11 @@ def main() -> int:
     def _start() -> None:
         window.read_config()
         save_config(cfg)
+        if not cfg.regions:
+            state["error"] = "add a region first"
+            window.set_running(False)
+            window.set_status_text(state["error"])
+            return
         pipeline = state["pipeline"]
         if pipeline is None:
             engine = load_engine(cfg)
@@ -231,7 +243,7 @@ def main() -> int:
             overlay.show()
         state["running"] = True
         window.set_running(True)
-        outline.set_visible_for(stopped=False, force=window.show_outlines.isChecked())
+        outline_visibility()
 
     def stop() -> None:
         pipeline = state["pipeline"]
@@ -254,15 +266,12 @@ def main() -> int:
         active = selected if selected is not None and selected < len(rects) else None
         outline.set_regions(rects, active, set(range(applied, len(rects))))
 
-    def pick() -> None:
-        overlay.hide()
-        picked = pick_regions(screen)
-        if state["running"]:
-            if not os.environ.get("OCRTRANS_NO_OVERLAY"):
-                overlay.show()
-        if not picked:
-            return
-        cfg.regions = [asdict(from_physical(rect, screen)) for rect in picked]
+    def outline_visibility() -> None:
+        outline.set_visible_for(
+            stopped=not state["running"], force=window.show_outlines.isChecked()
+        )
+
+    def apply_regions() -> None:
         save_config(cfg)
         rects = RegionSet.from_config(cfg, screen)
         pipeline = state["pipeline"]
@@ -271,6 +280,45 @@ def main() -> int:
         overlay.set_regions(rects)
         window.refresh_regions()
         refresh_outline()
+
+    def saved_regions() -> list[NormalizedRegion]:
+        return [NormalizedRegion(**raw) for raw in cfg.regions]
+
+    def pick() -> None:
+        overlay.hide()
+        outline.hide()
+        picked = pick_regions(screen)
+        if state["running"]:
+            if not os.environ.get("OCRTRANS_NO_OVERLAY"):
+                overlay.show()
+        if picked:
+            cfg.regions = [
+                asdict(region) for region in add_region(saved_regions(), picked[0], screen)
+            ]
+            apply_regions()
+        outline_visibility()
+
+    def adjust_region(index: int) -> None:
+        if not 0 <= index < len(cfg.regions):
+            return
+        overlay.hide()
+        outline.hide()
+        current = to_physical(NormalizedRegion(**cfg.regions[index]), screen)
+        edited = adjust_rect(screen, current)
+        if state["running"]:
+            if not os.environ.get("OCRTRANS_NO_OVERLAY"):
+                overlay.show()
+        if edited is not None:
+            cfg.regions = [
+                asdict(region)
+                for region in replace_region(saved_regions(), index, edited, screen)
+            ]
+            apply_regions()
+        outline_visibility()
+
+    def delete_region(index: int) -> None:
+        cfg.regions = [asdict(region) for region in remove_region(saved_regions(), index)]
+        apply_regions()
 
     def apply_settings(new_cfg: Config) -> None:
         save_config(new_cfg)
@@ -322,8 +370,8 @@ def main() -> int:
         start,
         stop,
         pick,
-        lambda index: None,
-        lambda index: None,
+        adjust_region,
+        delete_region,
         apply_settings,
         status,
         screen,
