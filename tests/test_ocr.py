@@ -3,7 +3,7 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from ocrtrans.geometry import Box, Rect
-from ocrtrans.ocr import RapidOcrEngine, group_blocks
+from ocrtrans.ocr import RapidOcrEngine, group_blocks, merge_boxes, plan_tiles
 
 
 def test_lines_of_one_paragraph_group_in_reading_order():
@@ -85,3 +85,19 @@ def test_split_line_is_one_block():
     blocks = group_blocks(boxes)
     assert len(blocks) == 1
     assert blocks[0].text == "Open the gate"
+
+
+def test_plan_tiles_covers_a_2560x1440_region_in_at_most_four_tiles():
+    tiles = plan_tiles(2560, 1440)
+    assert 1 < len(tiles) <= 4
+    assert all(t.w <= 1344 and t.h <= 1344 for t in tiles)
+    assert tiles[0].x == 0 and tiles[0].y == 0
+    assert max(t.right for t in tiles) == 2560
+    assert max(t.bottom for t in tiles) == 1440
+
+
+def test_merge_boxes_keeps_the_higher_confidence_duplicate():
+    a = Box(Rect(0, 0, 100, 20), "HELLO", 0.7)
+    b = Box(Rect(2, 1, 100, 20), "HELLO", 0.9)
+    merged = merge_boxes([a, b])
+    assert len(merged) == 1 and merged[0].confidence == 0.9

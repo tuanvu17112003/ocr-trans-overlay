@@ -73,6 +73,15 @@ class RaisingOcr:
         raise RuntimeError("ocr broke")
 
 
+class WidthOcr:
+    """Simulates a wide region whose small text is lost at the 1280 cap."""
+
+    def read(self, frame):
+        if frame.shape[1] >= 2560:
+            return []
+        return [Box(Rect(10, 10, 300, 40), "tile text", 0.9)]
+
+
 class FastEngine:
     name, kind = "fast", "local"
 
@@ -307,6 +316,23 @@ def test_fallback_capture_still_runs_ocr():
     ev = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
     p.stop()
     assert ev is not None and ev.blocks[0].source_text == "XXX"
+
+
+def test_tiled_rescue_finds_text_a_single_pass_missed():
+    p = pipeline_with(
+        capture=FakeCapture(np.zeros((1440, 2560, 3), np.uint8)),
+        ocr=WidthOcr(),
+        region=Rect(0, 0, 2560, 1440),
+        fps=60,
+    )
+    p.start()
+    ev = p.wait_event(
+        lambda e: e.kind == EventKind.OCR_RESULT
+        and any(b.source_text == "tile text" for b in e.blocks),
+        timeout=4.0,
+    )
+    p.stop()
+    assert ev is not None
 
 
 def test_scan_ids_increase_and_reset_with_the_epoch():

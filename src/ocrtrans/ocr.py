@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import cv2
 
-from .geometry import Box, Rect, union_all
+from .geometry import Box, Rect, iou, union_all
 
 
 @dataclass
@@ -155,3 +156,39 @@ class RapidOcrEngine:
 
     def close(self) -> None:
         self._engine = None
+
+
+def plan_tiles(
+    width: int,
+    height: int,
+    max_side: int = 1280,
+    overlap: int = 64,
+    max_tiles: int = 2,
+) -> list[Rect]:
+    """Region-local tiles for the bounded rescue scan, row-major."""
+    cols = max(1, min(max_tiles, math.ceil(width / max_side)))
+    rows = max(1, min(max_tiles, math.ceil(height / max_side)))
+    tile_w = math.ceil(width / cols)
+    tile_h = math.ceil(height / rows)
+    tiles: list[Rect] = []
+    for row in range(rows):
+        for col in range(cols):
+            x, y = col * tile_w, row * tile_h
+            tiles.append(
+                Rect(x, y, min(width - x, tile_w + overlap), min(height - y, tile_h + overlap))
+            )
+    return tiles
+
+
+def merge_boxes(boxes: list[Box], threshold: float = 0.5) -> list[Box]:
+    """Drop duplicates produced by the tile overlap, keeping the better score."""
+    kept: list[Box] = []
+    for box in boxes:
+        for index, existing in enumerate(kept):
+            if iou(existing.rect, box.rect) >= threshold:
+                if box.confidence > existing.confidence:
+                    kept[index] = box
+                break
+        else:
+            kept.append(box)
+    return kept

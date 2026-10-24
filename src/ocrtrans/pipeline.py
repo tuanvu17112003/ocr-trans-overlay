@@ -17,7 +17,7 @@ from .blocks import BlockMemory, BlockState, TrackBlock
 from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
 from .geometry import Box, Rect, union_all
-from .ocr import group_blocks
+from .ocr import group_blocks, merge_boxes, plan_tiles
 from .scan import MIN_INTERVAL_S, ScanBudget, frame_changed
 from .stats import LatencyStats
 from .translate import Engine, TranslationService
@@ -146,6 +146,7 @@ class Pipeline:
         budget: ScanBudget | None = None,
         gate: ExclusionGate | None = None,
         fps: int = 15,
+        tile_cooldown_s: float = 2.0,
         clock=time.monotonic,
     ) -> None:
         self.capture = capture
@@ -154,6 +155,7 @@ class Pipeline:
         self.emit = emit
         self.gate = gate
         self.fps = fps
+        self.tile_cooldown_s = tile_cooldown_s
         self.clock = clock
         self.memory = memory or BlockMemory()
         self.budget = budget or ScanBudget(fps)
@@ -176,6 +178,9 @@ class Pipeline:
         self._last_ocr_end = clock() - 10.0
         self._last_ocr_ms = 0.0
         self._empty_count = 0
+        self._tiled = 0
+        self._last_tiled_at = -1e9
+        self._prev_tiled = False
 
         self._ocr_passes = 0
         self._ocr_errors = 0
@@ -224,6 +229,8 @@ class Pipeline:
         self._last_ocr_ms = 0.0
         self._interval = MIN_INTERVAL_S
         self._last_ocr_end = self.clock() - 10.0
+        self._prev_tiled = False
+        self._last_tiled_at = -1e9
 
     def set_regions(self, rects: list[Rect]) -> None:
         self._regions = list(rects)
@@ -281,6 +288,7 @@ class Pipeline:
             "ocr_p95": round(self._ocr_stats.percentile(95), 1),
             "ocr_saturated": self._ocr_busy.is_set(),
             "mt_saturated": self._mt_queue.qsize() > 0,
+            "tiled": self._tiled,
         }
 
     # ---- capture ----------------------------------------------------------
@@ -401,7 +409,15 @@ class Pipeline:
                 self._submit_mt(block, epoch, origin)
 
     def _run_ocr(self, frame: np.ndarray) -> list[TrackBlock]:
-        grouped = group_blocks(self.ocr.read(frame))
+        boxes = self.ocr.read(frame)
+        tiled = False
+        if not boxes and self._tile_allowed():
+            boxes = self._read_tiled(frame)
+            tiled = True
+            self._tiled += 1
+            self._last_tiled_at = self.clock()
+        self._prev_tiled = tiled
+        grouped = group_blocks(boxes)
         boxes = [
             Box(
                 rect=block.rect,
@@ -413,6 +429,37 @@ class Pipeline:
         ]
         ttl = self.budget.ttl(self._interval)
         return self.memory.observe(boxes, self.clock(), ttl_s=ttl)
+
+    def _tile_allowed(self) -> bool:
+        region = self._region()
+        if max(region.w, region.h) <= 1600:
+            return False
+        if self._prev_tiled:
+            return False
+        return self.clock() - self._last_tiled_at >= self.tile_cooldown_s
+
+    def _read_tiled(self, frame: np.ndarray) -> list[Box]:
+        boxes: list[Box] = []
+        height, width = frame.shape[:2]
+        for tile in plan_tiles(width, height):
+            crop = frame[tile.y : tile.bottom, tile.x : tile.right]
+            if crop.size == 0:
+                continue
+            for box in self.ocr.read(crop):
+                boxes.append(
+                    Box(
+                        rect=Rect(
+                            box.rect.x + tile.x,
+                            box.rect.y + tile.y,
+                            box.rect.w,
+                            box.rect.h,
+                        ),
+                        text=box.text,
+                        confidence=box.confidence,
+                        line_px=box.line_px,
+                    )
+                )
+        return merge_boxes(boxes)
 
     # ---- translation ------------------------------------------------------
 
