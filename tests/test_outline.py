@@ -14,10 +14,18 @@ def test_outline_keeps_the_regions_and_selection(qapp):
 def test_outline_stays_hidden_while_running(qapp, monkeypatch):
     monkeypatch.setattr(outline_mod, "exclude_from_capture", lambda hwnd: True)
     view = RegionOutline(Rect(0, 0, 1000, 1000))
+    view.set_regions([Rect(10, 10, 100, 40)], active=0, inactive=set())
     assert view.set_visible_for(stopped=False, force=False) is False
     assert view.set_visible_for(stopped=True, force=False) is True
     assert view.set_visible_for(stopped=False, force=True) is True
     assert view.set_visible_for(stopped=False, force=False) is False
+    view.close()
+
+
+def test_outline_hides_when_no_region_is_known(qapp, monkeypatch):
+    monkeypatch.setattr(outline_mod, "exclude_from_capture", lambda hwnd: True)
+    view = RegionOutline(Rect(0, 0, 1000, 1000))
+    assert view.set_visible_for(stopped=True, force=True) is False
     view.close()
 
 

@@ -82,7 +82,6 @@ class ControlWindow(QWidget):
         self.min_font = QSpinBox()
         self.min_font.setRange(8, 32)
         self.min_font.setValue(config.min_font_px)
-        self.min_font.valueChanged.connect(lambda _value: self._paint_preview())
 
         self.region_list = QListWidget()
         self.add_button = QPushButton("Add region")
@@ -104,7 +103,6 @@ class ControlWindow(QWidget):
         self.bg_color_button.clicked.connect(self._pick_bg_color)
         self.font_combo = QFontComboBox()
         self.font_combo.setCurrentFont(QFont(config.font_family))
-        self.font_combo.currentFontChanged.connect(self._on_font_changed)
         self.preview = QLabel("Đây là bản dịch mẫu")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setMinimumHeight(56)
@@ -134,6 +132,9 @@ class ControlWindow(QWidget):
         mode_row.addStretch()
         mode_row.addWidget(self.show_outlines)
         regions_layout.addLayout(mode_row)
+        self.region_hint = QLabel("No region yet — Add one")
+        self.region_hint.setObjectName("muted")
+        regions_layout.addWidget(self.region_hint)
         regions_layout.addWidget(self.region_list)
         button_row = QHBoxLayout()
         button_row.addWidget(self.add_button)
@@ -178,6 +179,8 @@ class ControlWindow(QWidget):
         self.set_appearance(
             config.text_color, config.bg_color, config.font_family, config.min_font_px
         )
+        self.min_font.valueChanged.connect(lambda _value: self._apply_appearance())
+        self.font_combo.currentFontChanged.connect(self._on_font_changed)
         self.refresh_regions()
 
         self.engine.currentTextChanged.connect(self._sync_keys)
@@ -223,7 +226,11 @@ class ControlWindow(QWidget):
 
     def _on_font_changed(self, font: QFont) -> None:
         self._font_family = font.family()
+        self._apply_appearance()
+
+    def _apply_appearance(self) -> None:
         self._paint_preview()
+        self.on_apply(self.read_config())
 
     def _sync_swatches(self) -> None:
         for button, color, label in (
@@ -255,6 +262,7 @@ class ControlWindow(QWidget):
                 self._font_family,
                 self.min_font.value(),
             )
+            self.on_apply(self.read_config())
 
     def _pick_bg_color(self) -> None:
         color = QColorDialog.getColor(QColor(self._bg_color), self, "Overlay background color")
@@ -265,6 +273,7 @@ class ControlWindow(QWidget):
                 self._font_family,
                 self.min_font.value(),
             )
+            self.on_apply(self.read_config())
 
     def selected_region(self) -> int | None:
         row = self.region_list.currentRow()
@@ -273,6 +282,7 @@ class ControlWindow(QWidget):
     def refresh_regions(self) -> None:
         current = self.selected_region()
         self.region_list.clear()
+        self.region_hint.setVisible(not self.config.regions)
         applied = 1 if self.mode.currentText() == "single" else len(self.config.regions)
         for index, raw in enumerate(self.config.regions):
             rect = to_physical(NormalizedRegion(**raw), self.monitor)

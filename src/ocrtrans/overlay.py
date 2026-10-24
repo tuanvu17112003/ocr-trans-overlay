@@ -147,6 +147,11 @@ class OverlayWindow(QWidget):
 
     def _drain(self) -> None:
         now = time.monotonic()
+        if self.measure.family != self.config.font_family:
+            # A font change with a static screen never reaches show_items.
+            self.measure = QtMeasure(self.config.font_family, self.dpr)
+            self._recompute()
+            self.update()
         latest = self._items
         while True:
             try:

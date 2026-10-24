@@ -126,7 +126,14 @@ def main() -> int:
         "on" if os.environ.get("OCRTRANS_DEBUG") else "off",
         RegionSet.from_config(cfg, screen),
     )
-    state: dict = {"pipeline": None, "engine_name": None, "running": False, "starting": False, "error": ""}
+    state: dict = {
+        "pipeline": None,
+        "engine_name": None,
+        "running": False,
+        "starting": False,
+        "picking": False,
+        "error": "",
+    }
     actions: queue.Queue = queue.Queue()
     hotkeys = HotkeyManager()
     hud_state = {"visible": False}
@@ -260,7 +267,7 @@ def main() -> int:
         if not cfg.regions:
             outline.set_regions([], None, set())
             return
-        rects = RegionSet.from_config(cfg, screen)
+        rects = [to_physical(NormalizedRegion(**raw), screen) for raw in cfg.regions]
         applied = 1 if window.mode.currentText() == "single" else len(rects)
         selected = window.selected_region()
         active = selected if selected is not None and selected < len(rects) else None
@@ -285,9 +292,15 @@ def main() -> int:
         return [NormalizedRegion(**raw) for raw in cfg.regions]
 
     def pick() -> None:
-        overlay.hide()
-        outline.hide()
-        picked = pick_regions(screen)
+        if state["picking"]:
+            return
+        state["picking"] = True
+        try:
+            overlay.hide()
+            outline.hide()
+            picked = pick_regions(screen)
+        finally:
+            state["picking"] = False
         if state["running"]:
             if not os.environ.get("OCRTRANS_NO_OVERLAY"):
                 overlay.show()
@@ -299,12 +312,16 @@ def main() -> int:
         outline_visibility()
 
     def adjust_region(index: int) -> None:
-        if not 0 <= index < len(cfg.regions):
+        if not 0 <= index < len(cfg.regions) or state["picking"]:
             return
-        overlay.hide()
-        outline.hide()
-        current = to_physical(NormalizedRegion(**cfg.regions[index]), screen)
-        edited = adjust_rect(screen, current)
+        state["picking"] = True
+        try:
+            overlay.hide()
+            outline.hide()
+            current = to_physical(NormalizedRegion(**cfg.regions[index]), screen)
+            edited = adjust_rect(screen, current)
+        finally:
+            state["picking"] = False
         if state["running"]:
             if not os.environ.get("OCRTRANS_NO_OVERLAY"):
                 overlay.show()
@@ -322,6 +339,7 @@ def main() -> int:
 
     def apply_settings(new_cfg: Config) -> None:
         save_config(new_cfg)
+        overlay.update()
         pipeline = state["pipeline"]
         if pipeline is not None:
             pipeline.set_fps(new_cfg.capture_fps)
@@ -350,6 +368,8 @@ def main() -> int:
         capture.close()
 
     def handle(action: str) -> None:
+        if state["picking"] and action in {"region", "toggle", "mode", "settings"}:
+            return
         if action == "quit":
             app.quit()
         elif action == "toggle":
@@ -380,6 +400,7 @@ def main() -> int:
     window.show()
     window.region_list.currentRowChanged.connect(lambda _row: refresh_outline())
     window.mode.currentTextChanged.connect(lambda _mode: refresh_outline())
+    window.show_outlines.toggled.connect(lambda _checked: outline_visibility())
     refresh_outline()
     outline.set_visible_for(stopped=True, force=window.show_outlines.isChecked())
 

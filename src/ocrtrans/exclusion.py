@@ -19,6 +19,8 @@ def exclude_from_capture(hwnd: int) -> bool:
     user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
     user32.SetWindowLongPtrW.restype = ctypes.c_longlong
     user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_longlong]
+    user32.SetWindowDisplayAffinity.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    user32.SetWindowDisplayAffinity.restype = ctypes.c_int
     style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
     style |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
     user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)

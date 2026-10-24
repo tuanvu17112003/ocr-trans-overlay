@@ -132,3 +132,17 @@ def test_theme_is_applied_once(qapp):
 
     theme.apply(qapp)
     assert theme.ACCENT in qapp.styleSheet()
+
+
+def test_appearance_change_is_applied_immediately(qapp):
+    calls: list = []
+    window = make_window(Config(regions=[ONE]), calls)
+    window.min_font.setValue(20)
+    assert "apply" in calls
+    window.close()
+
+
+def test_the_window_hints_when_no_region_exists(qapp):
+    window = make_window(Config(regions=[]))
+    assert not window.region_hint.isHidden()
+    window.close()

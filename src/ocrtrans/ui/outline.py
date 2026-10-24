@@ -55,7 +55,7 @@ class RegionOutline(QWidget):
         self.update()
 
     def set_visible_for(self, stopped: bool, force: bool) -> bool:
-        if not (stopped or force):
+        if not (stopped or force) or not self.rects:
             self.hide()
             return False
         if not self.excluded:
@@ -74,9 +74,9 @@ class RegionOutline(QWidget):
         box = union_all(self.rects) if self.rects else self.screen_rect
         full = self.screen_rect
         x = max(full.x, box.x - MARGIN_PX)
-        y = max(full.y, box.y - MARGIN_PX)
+        y = max(full.y, box.y - BADGE_H - MARGIN_PX)
         right = min(full.right, box.right + MARGIN_PX)
-        bottom = min(full.bottom, box.bottom + BADGE_H + MARGIN_PX)
+        bottom = min(full.bottom, box.bottom + MARGIN_PX)
         self._origin = (x, y)
         self.setGeometry(x, y, max(1, right - x), max(1, bottom - y))
 

@@ -51,6 +51,7 @@ class RegionPicker(QWidget):
         self.show()
         self.activateWindow()
         self.setFocus()
+        self.grabKeyboard()
         self._loop.exec()
         return self._adjusted
 
@@ -132,6 +133,8 @@ class RegionPicker(QWidget):
         self.close()
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        if self._mode == "adjust":
+            self.releaseKeyboard()
         self._loop.quit()
         super().closeEvent(event)
 
