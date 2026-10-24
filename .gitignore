@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.superpowers/
+.codegraph/
+bench/report.md
+*.egg-info/
+*.log
+.env
+config.json
