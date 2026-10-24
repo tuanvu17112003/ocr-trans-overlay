@@ -35,13 +35,13 @@ def test_a_block_that_left_the_snapshot_disappears_at_once():
 
 def test_digit_change_never_keeps_the_old_translation():
     s = shown_state("You have 100 HP", "Bạn có 100 HP")
-    out = s.on_event(
-        ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "You have 10 HP")]),
-        0.2,
+    assert (
+        s.on_event(
+            ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "You have 10 HP")]),
+            0.2,
+        )
+        == []
     )
-    # the cover stays so the source text and the video never flash, but no
-    # text is painted until the translation for the new text arrives
-    assert [i.text for i in out] == [""]
 
 
 def test_translation_for_old_source_is_dropped():
@@ -126,18 +126,14 @@ def test_watchdog_uses_the_gap_after_this_pass_not_the_one_before():
     assert s.tick(2.5) == []
 
 
-def test_stale_translation_does_not_return_after_a_capture_gap():
+def test_stale_cover_does_not_return_after_a_capture_gap():
     s = OverlayState(watchdog_s=1.5)
     s.on_event(ev(EventKind.OCR_RESULT, scan_id=1, blocks=[block(1, "A")]), 0.0)
     s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "A-VI", "A")]), 0.1)
     assert s.tick(1.6) == []
     s.on_event(ev(EventKind.CAPTURE_HEALTH, health=Health.OK), 1.7)
-    out = s.on_event(ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "B")]), 1.8)
-    assert [i.text for i in out] == [""]
-    out = s.on_event(
-        ev(EventKind.TRANSLATION_RESULT, items=[item(1, "A-VI", "A")]), 1.9
-    )
-    assert [i.text for i in out] == [""]
+    assert s.on_event(ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "B")]), 1.8) == []
+    assert s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "A-VI", "A")]), 1.9) == []
 
 
 def test_reset_clears_and_older_epoch_is_ignored():

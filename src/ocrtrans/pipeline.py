@@ -479,9 +479,7 @@ class Pipeline:
                 and self._last_mt.get(block.id) != (block.text, epoch)
             ]
             candidates.sort(key=lambda block: block.rect.w * block.rect.h, reverse=True)
-            # Subtitles/lyrics are the few largest blocks. Translating a dozen
-            # noise detections per pass saturates the CPU/GPU and paints junk.
-            for block in candidates[:4]:
+            for block in candidates[:12]:
                 self._submit_mt(block, epoch, origin)
 
     def _run_ocr(self, frame: np.ndarray, epoch: int) -> list[TrackBlock]:

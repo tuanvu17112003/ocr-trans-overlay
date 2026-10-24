@@ -21,7 +21,6 @@ class _Block:
     translated: str = ""
     translated_for: str = ""
     line_px: int = 0
-    covered: bool = False
 
 
 class OverlayState:
@@ -138,7 +137,6 @@ class OverlayState:
                 continue  # translation for text that is no longer on screen
             block.translated = item.text
             block.translated_for = item.source_text
-            block.covered = True
 
     def _watchdog(self, now: float) -> None:
         if self._suppressed or self._last_ocr_at is None:
@@ -158,13 +156,14 @@ class OverlayState:
             return []
         items: list[RenderItem] = []
         for block in self._blocks.values():
-            current = block.translated and _norm(block.translated_for) == _norm(block.source)
-            if not current and not block.covered:
-                continue  # nothing to show and nothing to keep covered
+            if not block.translated:
+                continue
+            if _norm(block.translated_for) != _norm(block.source):
+                continue
             items.append(
                 RenderItem(
                     block_id=block.block_id,
-                    text=block.translated if current else "",
+                    text=block.translated,
                     rect=block.rect,
                     source_text=block.source,
                     cached=False,
