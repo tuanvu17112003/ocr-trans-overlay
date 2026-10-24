@@ -194,6 +194,7 @@ class Pipeline:
         self._inflight = 0
         self._ocr_stats = LatencyStats()
         self._mt_stats = LatencyStats()
+        self._grab_stats = LatencyStats()
 
     # ---- public API -------------------------------------------------------
 
@@ -302,6 +303,8 @@ class Pipeline:
             "tiled": self._tiled,
             "scan_rate": round(len(self._scan_times) / 5.0, 1),
             "last_scan_ms": round(self._last_ocr_ms, 2),
+            "grab_p50": round(self._grab_stats.percentile(50), 1),
+            "grab_p95": round(self._grab_stats.percentile(95), 1),
         }
 
     # ---- capture ----------------------------------------------------------
@@ -357,7 +360,9 @@ class Pipeline:
                 time.sleep(0.05)
                 continue
             try:
+                grab_started = self.clock()
                 frame, health = self.capture.grab(self._region())
+                self._grab_stats.add((self.clock() - grab_started) * 1000.0, cached=False)
             finally:
                 if gate is not None:
                     gate.release()
@@ -451,7 +456,9 @@ class Pipeline:
                 and self._last_mt.get(block.id) != (block.text, epoch)
             ]
             candidates.sort(key=lambda block: block.rect.w * block.rect.h, reverse=True)
-            for block in candidates[:12]:
+            # Subtitles/lyrics are the few largest blocks. Translating a dozen
+            # noise detections per pass saturates the CPU/GPU and paints junk.
+            for block in candidates[:4]:
                 self._submit_mt(block, epoch, origin)
 
     def _run_ocr(self, frame: np.ndarray, epoch: int) -> list[TrackBlock]:

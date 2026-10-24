@@ -112,7 +112,10 @@ class WgcBackend:
 
         self._latest: np.ndarray | None = None
         self._lock = threading.Lock()
+        self._cv = threading.Condition(self._lock)
         self._rect: Rect | None = None
+        self._wanted = False
+        self._seq = 0
         self.full_dark = False
         self._capture = WindowsCapture(
             cursor_capture=False,
@@ -139,9 +142,12 @@ class WgcBackend:
 
     def _store_frame(self, frame) -> None:
         with self._lock:
+            # Convert and crop only for a requested grab: at 60 Hz a full-frame
+            # BGR conversion would burn a core for nothing.
+            if not self._wanted or self._rect is None:
+                return
             rect = self._rect
-        if rect is None:
-            return
+            self._wanted = False
         image = frame.convert_to_bgr().frame_buffer
         self.full_dark = _is_dark_sample(image, "bgra8")
         height, width = image.shape[:2]
@@ -152,12 +158,17 @@ class WgcBackend:
         crop = image[y0:y1, x0:x1].copy()
         with self._lock:
             self._latest = crop
+            self._seq += 1
+            self._cv.notify_all()
 
     def grab(self, rect: Rect) -> np.ndarray | None:
         with self._lock:
             self._rect = rect
+            self._wanted = True
+            seen = self._seq
         self._ensure_started()
-        with self._lock:
+        with self._cv:
+            self._cv.wait_for(lambda: self._seq != seen, timeout=0.1)
             return self._latest
 
     def close(self) -> None:

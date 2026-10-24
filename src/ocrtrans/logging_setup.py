@@ -24,3 +24,7 @@ def setup_logging(level: int = logging.INFO) -> None:
     stream = logging.StreamHandler(sys.stderr)
     stream.setFormatter(fmt)
     root.addHandler(stream)
+
+    # Argos dumps every token and hypothesis at INFO; that floods the log and
+    # costs CPU on each translation.
+    logging.getLogger("argostranslate").setLevel(logging.WARNING)

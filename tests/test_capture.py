@@ -94,6 +94,9 @@ def test_wgc_stores_only_the_region_of_each_frame():
     backend._lock = threading.Lock()
     backend._latest = None
     backend._rect = Rect(1, 1, 4, 3)
+    backend._wanted = True
+    backend._seq = 0
+    backend._cv = threading.Condition(backend._lock)
 
     buffer = np.full((20, 30, 4), 7, np.uint8)
     buffer[2, 3] = (10, 20, 30, 255)
@@ -133,3 +136,37 @@ def test_dxgi_close_drops_the_session_on_the_calling_thread():
     backend.close()
     assert backend._session is None
     assert backend._closed is True
+
+
+def test_wgc_converts_only_the_requested_frame():
+    import threading
+
+    from ocrtrans.capture import WgcBackend
+
+    class Converted:
+        frame_buffer = np.full((8, 8, 3), 200, np.uint8)
+
+    class Frame:
+        def __init__(self):
+            self.converted = 0
+
+        def convert_to_bgr(self):
+            self.converted += 1
+            return Converted()
+
+    backend = WgcBackend.__new__(WgcBackend)
+    backend._latest = None
+    backend._lock = threading.Lock()
+    backend._cv = threading.Condition(backend._lock)
+    backend._rect = Rect(1, 1, 2, 2)
+    backend._wanted = False
+    backend._seq = 0
+    backend.full_dark = False
+
+    frame = Frame()
+    backend._store_frame(frame)
+    assert frame.converted == 0, "an unwanted frame was converted"
+    backend._wanted = True
+    backend._store_frame(frame)
+    assert frame.converted == 1
+    assert backend._latest.shape == (2, 2, 3)

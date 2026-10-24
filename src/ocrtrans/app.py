@@ -7,6 +7,7 @@ import logging
 import os
 import queue
 import sys
+import time
 from dataclasses import asdict
 
 import requests
@@ -99,11 +100,18 @@ def main() -> int:
     overlay = OverlayWindow(screen, cfg, events)
     overlay.hide()
 
-    capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
+    if os.environ.get("OCRTRANS_WGC"):
+        # Desktop Duplication keeps the output in composition and can pace the
+        # video presenter badly; WGC is the OS capture path and does not.
+        capture = CaptureManager(WgcBackend(monitor_index=1), DxgiBackend())
+    else:
+        capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
     state: dict = {"pipeline": None, "engine_name": None, "running": False, "starting": False, "error": ""}
     actions: queue.Queue = queue.Queue()
     hotkeys = HotkeyManager()
     hud_state = {"visible": False}
+
+    _logged_at = {"at": 0.0}
 
     def status() -> dict:
         pipeline = state["pipeline"]
@@ -119,7 +127,7 @@ def main() -> int:
                 "blocks": 0,
                 "error": state["error"],
             }
-        return {
+        data = {
             **pipeline.stats(),
             "engine": state["engine_name"] or cfg.engine,
             "health": capture.health.name,
@@ -127,6 +135,11 @@ def main() -> int:
             "rendered": overlay.shown,
             "hidden_stale": overlay.state.hidden_stale,
         }
+        now = time.monotonic()
+        if now - _logged_at["at"] >= 5.0:
+            _logged_at["at"] = now
+            log.info("stats %s", data)
+        return data
 
     hud = HudWindow(status)
 

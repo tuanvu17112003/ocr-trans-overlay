@@ -37,6 +37,17 @@ def _median(values: list[int]) -> int:
     return ordered[len(ordered) // 2]
 
 
+def _trim_edge_noise(text: str) -> str:
+    """Drop a stray single letter at the edges: lyric videos put ♪/♫ there and
+    the recogniser reads them as S or J, which poisons the translation."""
+    words = text.split()
+    while len(words) > 1 and len(words[0]) == 1 and words[0].isalpha() and words[0].casefold() not in ("a", "i"):
+        words.pop(0)
+    while len(words) > 1 and len(words[-1]) == 1 and words[-1].isalpha() and words[-1].casefold() not in ("a", "i"):
+        words.pop()
+    return " ".join(words)
+
+
 def group_blocks(
     boxes: list[Box],
     max_gap_ratio: float = 0.6,
@@ -44,7 +55,12 @@ def group_blocks(
     max_lines: int = 6,
 ) -> list[Block]:
     """Merge text lines that sit under each other into paragraph blocks."""
-    kept = [b for b in boxes if b.confidence >= min_confidence and b.text.strip()]
+    kept = [
+        Box(rect=b.rect, text=_trim_edge_noise(b.text), confidence=b.confidence, line_px=b.line_px)
+        for b in boxes
+        if b.confidence >= min_confidence and b.text.strip()
+    ]
+    kept = [b for b in kept if b.text.strip()]
     if not kept:
         return []
     kept.sort(key=lambda b: (b.rect.y, b.rect.x))
@@ -119,6 +135,9 @@ class RapidOcrEngine:
             "Det.limit_side_len": 1280,
             "Det.box_thresh": 0.3,
             "Det.thresh": 0.2,
+            # 6 (the default) makes four recognition calls for a 20-line
+            # caption block; 16 halves the pass (172 -> 87 ms measured).
+            "Rec.rec_batch_num": 16,
         }
 
     def _ensure_loaded(self) -> None:

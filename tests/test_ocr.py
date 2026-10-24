@@ -113,3 +113,13 @@ def test_gpu_params_keep_the_same_thread_cap():
     params = RapidOcrEngine._params(True)
     assert params["EngineConfig.onnxruntime.use_cuda"] is True
     assert params["EngineConfig.onnxruntime.intra_op_num_threads"] == 2
+
+
+def test_a_music_note_read_as_a_letter_is_dropped():
+    from ocrtrans.ocr import _trim_edge_noise
+
+    assert _trim_edge_noise("S HEART MADE OF GLASS S") == "HEART MADE OF GLASS"
+    assert _trim_edge_noise("J SKIN TO BONE") == "SKIN TO BONE"
+    assert _trim_edge_noise("A tale of two") == "A tale of two"
+    assert _trim_edge_noise("I am here") == "I am here"
+    assert _trim_edge_noise("S") == "S"
