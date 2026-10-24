@@ -281,6 +281,14 @@ breaks a row fails the suite.
 
 ### 4.6 Overlay state machine
 
+As built (2026-10-24, after the video-freeze report): the overlay window is
+sized to the selected region (union of the regions plus 8 px) instead of the
+whole screen, and a change repaints only the union of the old and new cover
+rects. A full-screen layered topmost window forces DWM to recomposite the whole
+video area on every cover hide/show; while the audio keeps playing, the video
+image freezes. The window still has `WDA_EXCLUDEFROMCAPTURE`, is click-through,
+topmost and opaque inside each cover.
+
 `OverlayState` keeps
 `{block_id: _Block(rect, source, translated_for, translated, line_px)}` plus
 `last_scan_id` and `suppressed_at_scan`, and is fed by snapshots ordered by

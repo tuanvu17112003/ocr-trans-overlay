@@ -126,6 +126,10 @@ Run the harness yourself:
 - The overlay covers the whole OCR block with an opaque background and draws the
   Vietnamese inside it: the English source is never visible, and a block stays hidden
   until its translation for the current text has arrived (no mismatched pairs).
+- The overlay window is the size of the selected text region (plus 8 px), not the whole
+  screen, and a change repaints only the changed block. A full-screen layered window
+  makes the desktop compositor redo the whole video on every hide/show; the picture
+  freezes while the audio keeps playing.
 - Text is sized from the source line height and never painted outside the block: long
   Vietnamese shrinks to the font floor, then ends with an ellipsis (logged) instead of
   covering neighbouring text. Lines are broken by dynamic programming over the words at

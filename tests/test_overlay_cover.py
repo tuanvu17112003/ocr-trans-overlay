@@ -84,3 +84,19 @@ def test_an_unchanged_snapshot_does_not_repaint(qapp):
     overlay._drain()
     assert calls == [1], "an identical snapshot repainted the whole overlay"
     overlay.close()
+
+
+def test_the_overlay_window_shrinks_to_the_selected_region(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 2560, 1440), Config(), queue.Queue())
+    overlay.set_regions([Rect(63, 1245, 1760, 53)])
+    assert overlay.screen_rect == Rect(55, 1237, 1776, 69)
+    overlay.close()
+
+
+def test_damage_is_the_block_area_not_the_whole_screen(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 2560, 1440), Config(), queue.Queue())
+    damage = overlay._damage([], [make_item(rect=Rect(100, 200, 300, 60))])
+    assert damage.width() <= 304
+    assert damage.height() <= 64
+    assert damage.width() < 2560
+    overlay.close()

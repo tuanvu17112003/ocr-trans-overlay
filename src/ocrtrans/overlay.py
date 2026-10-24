@@ -14,11 +14,13 @@ from PyQt6.QtWidgets import QWidget
 
 from .config import Config
 from .fit import fit_text
-from .geometry import Rect
+from .geometry import Rect, union_all
 from .lifecycle import OverlayState
 from .pipeline import PipelineEvent, RenderItem
 
 log = logging.getLogger(__name__)
+
+MARGIN_PX = 8
 
 WDA_EXCLUDEFROMCAPTURE = 0x00000011
 GWL_EXSTYLE = -20
@@ -77,6 +79,7 @@ def _exclude_from_capture(hwnd: int) -> bool:
 class OverlayWindow(QWidget):
     def __init__(self, screen: Rect, config: Config, events_queue: queue.Queue) -> None:
         super().__init__()
+        self._full_screen = screen
         self.screen_rect = screen
         self.config = config
         self.events_queue = events_queue
@@ -130,6 +133,28 @@ class OverlayWindow(QWidget):
 
     def set_regions(self, rects: list[Rect]) -> None:
         self._regions = list(rects)
+        if not rects:
+            return
+        box = union_all(rects)
+        full = self._full_screen
+        x = max(full.x, box.x - MARGIN_PX)
+        y = max(full.y, box.y - MARGIN_PX)
+        right = min(full.right, box.right + MARGIN_PX)
+        bottom = min(full.bottom, box.bottom + MARGIN_PX)
+        rect = Rect(x, y, max(1, right - x), max(1, bottom - y))
+        if rect == self.screen_rect:
+            return
+        # A full-screen layered window forces DWM to composite the whole video
+        # on every repaint (and can drop the video overlay plane): keep the
+        # window on the text area only.
+        self.screen_rect = rect
+        dpr = self.dpr
+        self.setGeometry(
+            round(rect.x / dpr),
+            round(rect.y / dpr),
+            round(rect.w / dpr),
+            round(rect.h / dpr),
+        )
 
     def close(self) -> None:
         self._timer.stop()
@@ -150,9 +175,27 @@ class OverlayWindow(QWidget):
         if ticked is not None:
             latest = ticked
         if latest != self._items:
+            damage = self._damage(self._items, latest)
             self._items = latest
             self._recompute()
-            self.update()
+            if damage is None:
+                self.update()
+            else:
+                self.update(damage)
+
+    def _damage(self, old_items: list[RenderItem], new_items: list[RenderItem]) -> QRect | None:
+        """Repaint only the area the covers touch, not the whole overlay."""
+        rects = [item.rect for item in old_items] + [item.rect for item in new_items]
+        if not rects:
+            return None
+        box = union_all(rects)
+        dpr = self.dpr
+        return QRect(
+            round((box.x - self.screen_rect.x) / dpr) - 2,
+            round((box.y - self.screen_rect.y) / dpr) - 2,
+            round(box.w / dpr) + 4,
+            round(box.h / dpr) + 4,
+        )
 
     # ---- layout -----------------------------------------------------------
 
