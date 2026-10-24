@@ -67,6 +67,9 @@ class OverlayWindow(QWidget):
         self.events_queue = events_queue
         self.dpr = max(1.0, float(self.devicePixelRatioF()))
         self.measure = QtMeasure(config.font_family, self.dpr)
+        # Two floor lines of vertical room: a longer Vietnamese line grows instead
+        # of losing its tail. Raise it only if 3-line captions start truncating.
+        self.GROW_PX = 2 * config.min_font_px + 8
         self.state = OverlayState()
         self._items: list[RenderItem] = []
         self._layouts: list[_Layout] = []
@@ -122,13 +125,14 @@ class OverlayWindow(QWidget):
         x = max(full.x, box.x - MARGIN_PX)
         y = max(full.y, box.y - MARGIN_PX)
         right = min(full.right, box.right + MARGIN_PX)
-        bottom = min(full.bottom, box.bottom + MARGIN_PX)
+        bottom = min(full.bottom, box.bottom + MARGIN_PX + self.GROW_PX)
         rect = Rect(x, y, max(1, right - x), max(1, bottom - y))
         if rect == self.screen_rect:
             return
         # A full-screen layered window forces DWM to composite the whole video
         # on every repaint (and can drop the video overlay plane): keep the
-        # window on the text area only.
+        # window on the text area only. The bottom margin also reserves the
+        # room a grown cover needs.
         self.screen_rect = rect
         dpr = self.dpr
         log.info("overlay window %s", rect)
@@ -175,7 +179,10 @@ class OverlayWindow(QWidget):
 
     def _damage(self, old_items: list[RenderItem], new_items: list[RenderItem]) -> QRect | None:
         """Repaint only the area the covers touch, not the whole overlay."""
-        rects = [item.rect for item in old_items] + [item.rect for item in new_items]
+        rects = [
+            Rect(item.rect.x, item.rect.y, item.rect.w, item.rect.h + self.GROW_PX)
+            for item in old_items + new_items
+        ]
         if not rects:
             return None
         box = union_all(rects)
@@ -189,7 +196,7 @@ class OverlayWindow(QWidget):
 
     # ---- layout -----------------------------------------------------------
 
-    def _fit(self, item: RenderItem) -> _Layout:
+    def _fit(self, item: RenderItem, limit_bottom: int) -> _Layout:
         # two rects: cover = the whole OCR block, rect = the text inside it
         inner = Rect(item.rect.x + 2, item.rect.y, max(1, item.rect.w - 4), item.rect.h)
         fit = fit_text(
@@ -199,13 +206,14 @@ class OverlayWindow(QWidget):
             self.measure,
             line_px=item.line_px,
             min_font_px=self.config.min_font_px,
+            limit_bottom=limit_bottom,
         )
         if fit.truncated and item.block_id not in self._truncated_logged:
             self._truncated_logged.add(item.block_id)
             log.warning("block %s truncated at the font floor", item.block_id)
         y = inner.y + max(0, (inner.h - fit.rect.h) // 2)
         return _Layout(
-            cover=item.rect,
+            cover=Rect(item.rect.x, item.rect.y, item.rect.w, max(item.rect.h, fit.rect.h)),
             rect=Rect(inner.x, y, fit.rect.w, fit.rect.h),
             font_px=fit.font_px,
             lines=fit.lines,
@@ -214,7 +222,17 @@ class OverlayWindow(QWidget):
     def _recompute(self) -> None:
         if self.measure.family != self.config.font_family:
             self.measure = QtMeasure(self.config.font_family, self.dpr)
-        self._layouts = [self._fit(item) for item in self._items]
+        limits: list[int] = []
+        for item in self._items:
+            limit = min(self.screen_rect.bottom, item.rect.bottom + self.GROW_PX)
+            for other in self._items:
+                if other is item:
+                    continue
+                if item.rect.bottom <= other.rect.y <= limit:
+                    # A cover growing into another block would flicker with it.
+                    limit = min(limit, other.rect.y - 4)
+            limits.append(limit)
+        self._layouts = [self._fit(item, limit) for item, limit in zip(self._items, limits)]
 
     # ---- painting ---------------------------------------------------------
 

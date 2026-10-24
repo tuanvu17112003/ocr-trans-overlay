@@ -59,3 +59,32 @@ def test_wrapped_lines_keep_every_word_and_fit_the_width():
 def test_overlong_word_is_split_not_dropped():
     r = fit_text("short " + "x" * 60, Rect(0, 0, 80, 200), Rect(0, 0, 400, 400), MonoMeasure(), line_px=14)
     assert "".join(r.lines).replace(" ", "") == "short" + "x" * 60
+
+
+def test_limit_bottom_avoids_the_ellipsis():
+    text = "một hai ba bốn năm sáu bảy tám chín mười"
+    box = Rect(0, 400, 200, 30)
+    screen = Rect(0, 0, 1920, 1080)
+    tight = fit_text(text, box, screen, MonoMeasure(), min_font_px=12)
+    roomy = fit_text(text, box, screen, MonoMeasure(), min_font_px=12, limit_bottom=400 + 90)
+    assert tight.truncated is True
+    assert roomy.truncated is False
+    assert roomy.rect.h > box.h
+
+
+def test_limit_bottom_is_never_crossed():
+    text = "một hai ba bốn năm sáu bảy tám chín mười"
+    roomy = fit_text(
+        text, Rect(0, 400, 200, 30), Rect(0, 0, 1920, 1080), MonoMeasure(),
+        min_font_px=12, limit_bottom=450,
+    )
+    assert roomy.rect.bottom <= 450
+
+
+def test_no_limit_bottom_keeps_the_source_box():
+    box = Rect(0, 400, 200, 30)
+    result = fit_text(
+        "một hai ba bốn năm sáu bảy tám chín mười",
+        box, Rect(0, 0, 1920, 1080), MonoMeasure(), min_font_px=12,
+    )
+    assert result.rect.bottom <= box.bottom
