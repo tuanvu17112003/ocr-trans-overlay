@@ -56,3 +56,25 @@ def test_build_engine_returns_argos_before_the_consent_gate(monkeypatch):
     monkeypatch.setattr("ocrtrans.argos.ArgosEngine", FakeArgos)
     engine = app_module.build_engine(Config(engine="argos", online_consent=False))
     assert isinstance(engine, FakeArgos) and engine.loaded
+
+
+def test_nllb_falls_back_to_argos_without_transformers(monkeypatch):
+    from ocrtrans import app as app_module
+    from ocrtrans.config import Config
+
+    loaded = []
+
+    class FakeArgos:
+        name = "argos"
+
+        def load(self):
+            loaded.append(True)
+
+    def boom(name):
+        raise ImportError("no transformers")
+
+    monkeypatch.setattr(app_module, "build_local", boom)
+    monkeypatch.setattr("ocrtrans.argos.ArgosEngine", FakeArgos)
+    engine = app_module.build_engine(Config(engine="nllb"))
+    assert engine.name == "argos"
+    assert loaded == [True]

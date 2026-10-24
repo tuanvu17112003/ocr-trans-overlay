@@ -73,9 +73,22 @@ def build_local(name: str):
     return local
 
 
+def local_engine(name: str):
+    """Build a local model; without transformers (CPU build) use Argos instead."""
+    try:
+        return build_local(name)
+    except ImportError:
+        log.warning("%s needs transformers; using argos", name)
+        from .argos import ArgosEngine
+
+        engine = ArgosEngine()
+        engine.load()
+        return engine
+
+
 def build_engine(cfg: Config):
     if cfg.engine in LOCAL_REPOS:
-        return build_local(cfg.engine)
+        return local_engine(cfg.engine)
     if cfg.engine == "argos":
         from .argos import ArgosEngine
 
@@ -84,7 +97,7 @@ def build_engine(cfg: Config):
         return engine
     if not cfg.online_consent:
         log.warning("online engine selected without consent; falling back to nllb")
-        return build_local("nllb")
+        return local_engine("nllb")
 
     session = requests.Session()
     if cfg.engine == "google":
@@ -95,7 +108,7 @@ def build_engine(cfg: Config):
         primary = DeepLEngine(cfg.keys.get("deepl", ""), session)
     else:
         primary = GeminiEngine(cfg.keys.get("gemini", ""), session)
-    fallback = build_local("nllb") if cfg.fallback_to_local else None
+    fallback = local_engine("nllb") if cfg.fallback_to_local else None
     return OnlineRouter(primary, fallback)
 
 
@@ -206,7 +219,10 @@ def main() -> int:
             return None
         finally:
             QApplication.restoreOverrideCursor()
-        state["error"] = ""
+        if engine.name != config.engine:
+            state["error"] = f"{config.engine} unavailable; using {engine.name}"
+        else:
+            state["error"] = ""
         return engine
 
     def start() -> None:
