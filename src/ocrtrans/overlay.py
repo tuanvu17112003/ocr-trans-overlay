@@ -149,6 +149,7 @@ class OverlayWindow(QWidget):
         # window on the text area only.
         self.screen_rect = rect
         dpr = self.dpr
+        log.info("overlay window %s", rect)
         self.setGeometry(
             round(rect.x / dpr),
             round(rect.y / dpr),

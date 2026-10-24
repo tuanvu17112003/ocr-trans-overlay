@@ -54,6 +54,19 @@ Start/Stop and live status (engine, capture health, OCR passes and scan rate, sh
 p50/p95).
 Nothing is downloaded or captured until Start. Closing the window quits.
 
+Debug switches (environment variables):
+
+| Variable | Effect |
+|---|---|
+| `OCRTRANS_DEBUG=1` | verbose log: every scan (`ms`, blocks), OCR text per block, every translation (`ms`, chars, input/output), slow grabs |
+| `OCRTRANS_NO_OVERLAY=1` | run capture/OCR/MT without showing the overlay (A/B the overlay) |
+| `OCRTRANS_WGC=1` | use Windows Graphics Capture instead of Desktop Duplication (A/B the capture path) |
+
+The log lives at `%LOCALAPPDATA%\OCRTrans\app.log`. At INFO it prints a `stats {...}` line
+every 5 s with `grab_p50/p95`, `ocr_p50/p95`, translation `p50/p95`, `scan_rate`,
+`blocks`, `rendered`; any scan over 400 ms or translation over 500 ms is logged as a
+warning with its line/char count.
+
 ## Hotkeys
 
 | Keys | Action |

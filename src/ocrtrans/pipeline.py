@@ -195,6 +195,7 @@ class Pipeline:
         self._ocr_stats = LatencyStats()
         self._mt_stats = LatencyStats()
         self._grab_stats = LatencyStats()
+        self._last_health: Health | None = None
 
     # ---- public API -------------------------------------------------------
 
@@ -362,10 +363,16 @@ class Pipeline:
             try:
                 grab_started = self.clock()
                 frame, health = self.capture.grab(self._region())
-                self._grab_stats.add((self.clock() - grab_started) * 1000.0, cached=False)
+                grab_ms = (self.clock() - grab_started) * 1000.0
+                self._grab_stats.add(grab_ms, cached=False)
             finally:
                 if gate is not None:
                     gate.release()
+            if health is not self._last_health:
+                log.info("capture health %s (grab %.0f ms)", health.name, grab_ms)
+                self._last_health = health
+            elif grab_ms >= 100:
+                log.debug("slow grab %.0f ms (health %s)", grab_ms, health.name)
             if health is not Health.OK:
                 # hold/hide signals must reach the overlay even with no frame
                 self.emit(
@@ -430,6 +437,22 @@ class Pipeline:
             while self._scan_times and now - self._scan_times[0] > 5.0:
                 self._scan_times.popleft()
             self._last_blocks = len(blocks)
+            if self._last_ocr_ms >= 400:
+                log.warning(
+                    "slow scan %d: %.0f ms, %d blocks, interval %.2fs",
+                    scan_id,
+                    self._last_ocr_ms,
+                    len(blocks),
+                    self._interval,
+                )
+            else:
+                log.debug(
+                    "scan %d: %.0f ms, %d blocks, interval %.2fs",
+                    scan_id,
+                    self._last_ocr_ms,
+                    len(blocks),
+                    self._interval,
+                )
             self._empty_count = 0 if blocks else self._empty_count + 1
             snapshot = tuple(block.text for block in blocks)
             if snapshot == self._last_snapshot:
@@ -463,6 +486,7 @@ class Pipeline:
 
     def _run_ocr(self, frame: np.ndarray, epoch: int) -> list[TrackBlock]:
         boxes = self.ocr.read(frame)
+        log.debug("ocr: %d lines", len(boxes))
         tiled = False
         if not boxes and self._tile_allowed():
             boxes = self._read_tiled(frame)
@@ -471,6 +495,10 @@ class Pipeline:
             self._last_tiled_at = self.clock()
         self._prev_tiled = tiled
         grouped = group_blocks(boxes)
+        log.debug(
+            "ocr text: %s",
+            [(b.rect.w, b.rect.h, b.text[:60]) for b in grouped[:8]],
+        )
         boxes = [
             Box(
                 rect=block.rect,
@@ -567,10 +595,31 @@ class Pipeline:
             return
         finally:
             self._inflight -= len(tasks)
-        self._mt_stats.add((self.clock() - started) * 1000, cached=False)
+        elapsed = (self.clock() - started) * 1000
+        self._mt_stats.add(elapsed, cached=False)
+        chars = sum(len(payload[1]) for _, payload in tasks)
+        if elapsed >= 500:
+            log.warning(
+                "slow translation %.0f ms, %d lines, %d chars, queue %d",
+                elapsed,
+                len(tasks),
+                chars,
+                self._mt_queue.qsize(),
+            )
+        else:
+            log.debug(
+                "translated %d lines in %.0f ms (%d chars)", len(tasks), elapsed, chars
+            )
 
         items: list[RenderItem] = []
         for (block_id, (epoch, text, rect, line_px)), (result, cached) in zip(tasks, results):
+            log.debug(
+                "mt %s %r -> %r%s",
+                block_id,
+                text[:50],
+                (result or "")[:50],
+                " (cached)" if cached else "",
+            )
             if epoch != self.epoch or not self.enabled:
                 continue
             if not result:

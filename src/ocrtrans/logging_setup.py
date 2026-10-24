@@ -14,7 +14,7 @@ def setup_logging(level: int = logging.INFO) -> None:
     base.mkdir(parents=True, exist_ok=True)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     root = logging.getLogger()
-    root.setLevel(level)
+    root.setLevel(logging.DEBUG if os.environ.get("OCRTRANS_DEBUG") else level)
     root.handlers.clear()
 
     file_handler = RotatingFileHandler(base / "app.log", maxBytes=1_000_000, backupCount=2, encoding="utf-8")

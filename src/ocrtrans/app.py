@@ -106,6 +106,14 @@ def main() -> int:
         capture = CaptureManager(WgcBackend(monitor_index=1), DxgiBackend())
     else:
         capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
+    log.info(
+        "capture %s (backup %s); overlay %s; debug %s; region %s",
+        type(capture.main).__name__,
+        type(capture.fallback).__name__,
+        "off" if os.environ.get("OCRTRANS_NO_OVERLAY") else "on",
+        "on" if os.environ.get("OCRTRANS_DEBUG") else "off",
+        RegionSet.from_config(cfg, screen),
+    )
     state: dict = {"pipeline": None, "engine_name": None, "running": False, "starting": False, "error": ""}
     actions: queue.Queue = queue.Queue()
     hotkeys = HotkeyManager()
