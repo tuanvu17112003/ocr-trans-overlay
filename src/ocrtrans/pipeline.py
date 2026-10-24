@@ -24,6 +24,8 @@ from .translate import Engine, TranslationService
 
 log = logging.getLogger(__name__)
 
+RECENT_TEXT_S = 2.0  # a miss this soon after real text must not slow recovery
+
 
 def _offset(rect: Rect, origin: Rect) -> Rect:
     """Region-relative block rect -> screen rect."""
@@ -184,6 +186,7 @@ class Pipeline:
         self._prev_tiled = False
         self._last_snapshot: tuple = ()
         self._same_text_passes = 0
+        self._last_text_at: float | None = None
         self._scan_times: deque[float] = deque()
 
         self._ocr_passes = 0
@@ -244,6 +247,7 @@ class Pipeline:
         self._last_tiled_at = -1e9
         self._last_snapshot = ()
         self._same_text_passes = 0
+        self._last_text_at = None
 
     def set_regions(self, rects: list[Rect]) -> None:
         self._regions = list(rects)
@@ -326,6 +330,16 @@ class Pipeline:
     def _region(self) -> Rect:
         return union_all(self._regions) if self._regions else Rect(0, 0, 1920, 1080)
 
+    def _scan_interval(self) -> float:
+        """Empty-pass backoff, but not right after text: one missed caption
+        (fade, scene cut) must not cost a whole extra second to recover."""
+        recent_text = (
+            self._last_text_at is not None
+            and self.clock() - self._last_text_at < RECENT_TEXT_S
+        )
+        empty = 0 if recent_text else self._empty_count
+        return self.budget.interval(self._last_ocr_ms, empty, self._wake)
+
     def _capture_loop(self) -> None:
         try:
             self._capture_passes()
@@ -389,9 +403,7 @@ class Pipeline:
 
             wake, self._wake_prev = frame_changed(self._wake_prev, frame)
             self._wake = self._wake or wake
-            interval = self.budget.interval(
-                self._last_ocr_ms, self._empty_count, self._wake
-            )
+            interval = self._scan_interval()
             if self._same_text_passes >= 2:
                 # The text on screen did not change: scan at half rate. This is
                 # the only repeating load, and video pixels always "wake", so
@@ -454,6 +466,8 @@ class Pipeline:
                     self._interval,
                 )
             self._empty_count = 0 if blocks else self._empty_count + 1
+            if blocks:
+                self._last_text_at = now
             snapshot = tuple(block.text for block in blocks)
             if snapshot == self._last_snapshot:
                 self._same_text_passes += 1

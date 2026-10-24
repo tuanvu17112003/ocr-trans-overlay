@@ -347,6 +347,22 @@ def test_empty_results_back_off_to_one_pass_per_second():
     assert 2 <= passes <= 5
 
 
+def test_a_miss_right_after_text_does_not_back_off():
+    p = pipeline_with()
+    p._empty_count = 5
+    p._last_ocr_ms = 100.0
+    p._last_text_at = p.clock() - 1.0
+    assert p._scan_interval() <= 0.5
+
+
+def test_a_long_empty_stretch_still_backs_off():
+    p = pipeline_with()
+    p._empty_count = 5
+    p._last_ocr_ms = 100.0
+    p._last_text_at = p.clock() - 10.0
+    assert p._scan_interval() == 1.0
+
+
 class SwitchCapture:
     def __init__(self):
         self.frame = np.full((100, 200, 3), 30, np.uint8)
