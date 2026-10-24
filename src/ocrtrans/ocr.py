@@ -48,6 +48,22 @@ def _trim_edge_noise(text: str) -> str:
     return " ".join(words)
 
 
+MIN_TEXT_DENSITY = 5e-5
+
+
+def _looks_like_text(rect: Rect, text: str) -> bool:
+    """A 1050x317 blob that reads as five letters is a detector artefact.
+
+    A real subtitle line carries ~5e-4 alphanumerics per px²; the blob a
+    stalled video frame produced read "TANOV" at 1.5e-5 and then got a cover
+    and a translation of its own.
+    shortcut: a genuine caption wider than ~1000 px and taller than ~200 px
+    with fewer than six characters is dropped; raise if a title screen needs it.
+    """
+    chars = sum(1 for ch in text if ch.isalnum())
+    return chars / max(1, rect.w * rect.h) >= MIN_TEXT_DENSITY
+
+
 def group_blocks(
     boxes: list[Box],
     max_gap_ratio: float = 0.6,
@@ -55,12 +71,16 @@ def group_blocks(
     max_lines: int = 6,
 ) -> list[Block]:
     """Merge text lines that sit under each other into paragraph blocks."""
-    kept = [
-        Box(rect=b.rect, text=_trim_edge_noise(b.text), confidence=b.confidence, line_px=b.line_px)
-        for b in boxes
-        if b.confidence >= min_confidence and b.text.strip()
-    ]
-    kept = [b for b in kept if b.text.strip()]
+    kept: list[Box] = []
+    for box in boxes:
+        text = _trim_edge_noise(box.text)
+        if box.confidence < min_confidence or not text.strip():
+            continue
+        if not _looks_like_text(box.rect, text):
+            continue
+        kept.append(
+            Box(rect=box.rect, text=text, confidence=box.confidence, line_px=box.line_px)
+        )
     if not kept:
         return []
     kept.sort(key=lambda b: (b.rect.y, b.rect.x))

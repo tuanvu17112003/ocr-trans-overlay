@@ -471,11 +471,13 @@ class Pipeline:
                     scan_ms=self._last_ocr_ms,
                 )
             )
+            # Translate on first sight: waiting for STABLE cost one full scan
+            # (~0.5 s) of blank cover on every caption change, and the exact
+            # text match below already drops a translation for text that left.
             candidates = [
                 block
                 for block in blocks
-                if block.state is BlockState.STABLE
-                and len(block.text.strip()) >= 3
+                if len(block.text.strip()) >= 3
                 and self._last_mt.get(block.id) != (block.text, epoch)
             ]
             candidates.sort(key=lambda block: block.rect.w * block.rect.h, reverse=True)

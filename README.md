@@ -60,7 +60,7 @@ Debug switches (environment variables):
 |---|---|
 | `OCRTRANS_DEBUG=1` | verbose log: every scan (`ms`, blocks), OCR text per block, every translation (`ms`, chars, input/output), slow grabs |
 | `OCRTRANS_NO_OVERLAY=1` | run capture/OCR/MT without showing the overlay (A/B the overlay) |
-| `OCRTRANS_WGC=1` | use Windows Graphics Capture instead of Desktop Duplication (A/B the capture path) |
+| `OCRTRANS_DXGI=1` | force Desktop Duplication instead of the default Windows Graphics Capture (A/B the capture path) |
 
 The log lives at `%LOCALAPPDATA%\OCRTrans\app.log`. At INFO it prints a `stats {...}` line
 every 5 s with `grab_p50/p95`, `ocr_p50/p95`, translation `p50/p95`, `scan_rate`,

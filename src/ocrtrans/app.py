@@ -100,12 +100,13 @@ def main() -> int:
     overlay = OverlayWindow(screen, cfg, events)
     overlay.hide()
 
-    if os.environ.get("OCRTRANS_WGC"):
-        # Desktop Duplication keeps the output in composition and can pace the
-        # video presenter badly; WGC is the OS capture path and does not.
-        capture = CaptureManager(WgcBackend(monitor_index=1), DxgiBackend())
-    else:
+    if os.environ.get("OCRTRANS_DXGI"):
         capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
+    else:
+        # WGC first: an active Desktop Duplication session keeps the output out
+        # of the video's independent-flip path and measurably drops frames
+        # (5-8 per 15 s at 1440p60 in Edge; WGC dropped 0 in the same runs).
+        capture = CaptureManager(WgcBackend(monitor_index=1), DxgiBackend())
     log.info(
         "capture %s (backup %s); overlay %s; debug %s; region %s",
         type(capture.main).__name__,

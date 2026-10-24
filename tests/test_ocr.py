@@ -21,6 +21,18 @@ def test_confidence_filter_drops_noise():
     assert group_blocks(boxes, min_confidence=0.6) == []
 
 
+def test_a_short_string_in_a_huge_box_is_dropped():
+    # Real log: a moving video made the detector report one 1059x317 box.
+    boxes = [Box(Rect(0, 0, 1059, 317), "TANOV", 0.95)]
+    assert group_blocks(boxes) == []
+
+
+def test_a_real_subtitle_line_in_the_same_region_is_kept():
+    boxes = [Box(Rect(0, 0, 757, 79), "So this is a very pretty phone.", 0.95)]
+    blocks = group_blocks(boxes)
+    assert [b.text for b in blocks] == ["So this is a very pretty phone."]
+
+
 @pytest.mark.gpu
 def test_downscale_reads_full_width_and_maps_boxes():
     img = Image.new("RGB", (2000, 200), (18, 18, 22))

@@ -217,6 +217,18 @@ def test_epoch_cancel_clears_queue():
     p.stop()
 
 
+def test_a_new_block_is_translated_before_it_is_stable():
+    # A caption change must not leave the cover blank for a whole scan.
+    memory = BlockMemory("safe")
+    memory.stable_after_s = 3600.0  # never stable during this test
+    p = pipeline_with(memory=memory)
+    p.start()
+    event = p.wait_event(lambda e: e.kind == EventKind.TRANSLATION_RESULT)
+    p.stop()
+    assert event is not None
+    assert event.items[0].source_text == "XXX"
+
+
 def test_emitted_rects_are_screen_coordinates():
     p = pipeline_with(region=Rect(100, 50, 200, 100))
     p.start()
