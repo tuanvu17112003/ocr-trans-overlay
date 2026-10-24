@@ -120,17 +120,77 @@ def test_centred_wrapped_caption_is_one_block():
 
 
 def test_a_speaker_name_is_not_merged_into_the_dialogue():
-    # The name is rendered larger than the dialogue; the gap is small enough
-    # to pass the paragraph rule, so the font size must decide.
+    # Measured boxes (scripts/ocr_layout_samples.py, case A): name 50 px,
+    # dialogue 40 px, 26 px apart.
     boxes = [
-        Box(Rect(560, 40, 500, 44), "Beleaguered Celestial", 0.95),
-        Box(Rect(490, 104, 640, 30), "Oh, what am I supposed to do now...", 0.95),
+        Box(Rect(261, 26, 455, 50), "Beleaguered Celestial", 1.0),
+        Box(Rect(228, 102, 522, 40), "Oh, what am I supposed to do now...", 0.986),
     ]
     blocks = group_blocks(boxes)
     assert [b.text for b in blocks] == [
         "Beleaguered Celestial",
         "Oh, what am I supposed to do now...",
     ]
+
+
+def test_a_same_size_speaker_name_is_still_a_label():
+    # Measured case D: name and dialogue are both 40 px tall (3 px gap).
+    boxes = [
+        Box(Rect(295, 27, 384, 40), "Beleaguered Celestial", 1.0),
+        Box(Rect(228, 75, 522, 40), "Oh, what am I supposed to do now..", 0.989),
+    ]
+    blocks = group_blocks(boxes)
+    assert [b.text for b in blocks] == [
+        "Beleaguered Celestial",
+        "Oh, what am I supposed to do now..",
+    ]
+
+
+def test_a_speaker_name_over_a_two_line_dialogue_splits_off():
+    # Measured case G: 49 px name, two dialogue lines below.
+    boxes = [
+        Box(Rect(260, 8, 455, 49), "Beleaguered Celestial", 1.0),
+        Box(Rect(228, 69, 523, 41), "Oh, what am I supposed to do now..", 0.976),
+        Box(Rect(346, 106, 284, 45), "Nothing left to say.", 0.998),
+    ]
+    blocks = group_blocks(boxes)
+    assert [b.text for b in blocks] == [
+        "Beleaguered Celestial",
+        "Oh, what am I supposed to do now.. Nothing left to say.",
+    ]
+
+
+def test_a_wrapped_two_line_caption_stays_one_block():
+    # Measured case E: centred lines, no label shape on the first line.
+    boxes = [
+        Box(Rect(139, 35, 700, 36), "Not what you would expect from a Sentinel, is it?", 0.988),
+        Box(
+            Rect(210, 78, 555, 37),
+            "But that's exactly why, through all this,",
+            1.0,
+        ),
+    ]
+    blocks = group_blocks(boxes)
+    assert len(blocks) == 1
+    assert "through all this" in blocks[0].text
+
+
+def test_a_short_first_line_still_joins_its_continuation():
+    boxes = [
+        Box(Rect(0, 0, 300, 40), "I can't", 0.95),
+        Box(Rect(0, 52, 300, 40), "believe it.", 0.95),
+    ]
+    blocks = group_blocks(boxes)
+    assert len(blocks) == 1
+    assert blocks[0].text == "I can't believe it."
+
+
+def test_a_terminal_punctuation_short_line_is_not_a_label():
+    boxes = [
+        Box(Rect(0, 0, 200, 40), "The End.", 0.95),
+        Box(Rect(0, 48, 300, 40), "We move on.", 0.95),
+    ]
+    assert len(group_blocks(boxes)) == 1
 
 
 def test_plan_tiles_covers_a_2560x1440_region_in_at_most_four_tiles():
@@ -169,3 +229,42 @@ def test_a_music_note_read_as_a_letter_is_dropped():
     assert _trim_edge_noise("A tale of two") == "A tale of two"
     assert _trim_edge_noise("I am here") == "I am here"
     assert _trim_edge_noise("S") == "S"
+
+
+def test_a_quoted_dialogue_does_not_hide_the_name():
+    # Measured case M: the recogniser reads the opening quote as a broken glyph,
+    # so the uppercase test must look at the first letter, not the first char.
+    boxes = [
+        Box(Rect(261, 23, 455, 49), "Beleaguered Celestial", 1.0),
+        Box(Rect(214, 83, 540, 43), "\ufffdOh, what am I supposed to do now...'", 0.97),
+    ]
+    blocks = group_blocks(boxes)
+    assert [b.text for b in blocks] == [
+        "Beleaguered Celestial",
+        "\ufffdOh, what am I supposed to do now...'",
+    ]
+
+
+def test_a_five_word_name_is_still_a_label():
+    # Measured case N: capitalisation ratio, not every word.
+    boxes = [
+        Box(Rect(267, 30, 444, 39), "High Priestess of the Sun", 0.989),
+        Box(Rect(314, 88, 350, 38), "The gate opens at dawn.", 1.0),
+    ]
+    assert len(group_blocks(boxes)) == 2
+
+
+def test_two_columns_merge_within_their_own_column():
+    # Measured case I: a quest tracker on the left and a resource panel on the
+    # right; each column is one paragraph, and they never join.
+    boxes = [
+        Box(Rect(34, 39, 223, 37), "Quest: find the key", 0.976),
+        Box(Rect(694, 41, 93, 32), "HP 100", 1.0),
+        Box(Rect(35, 79, 211, 34), "Reward: 300 gold", 1.0),
+        Box(Rect(695, 80, 120, 31), "Ammo 30", 1.0),
+    ]
+    blocks = group_blocks(boxes)
+    assert [b.text for b in blocks] == [
+        "Quest: find the key Reward: 300 gold",
+        "HP 100 Ammo 30",
+    ]

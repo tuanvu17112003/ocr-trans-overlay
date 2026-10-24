@@ -12,13 +12,26 @@ not see. Local engines by default; free online engines are opt-in.
 
 ## Install
 
+```powershell
+.\install.ps1          # NVIDIA GPU, CUDA build (NLLB + Argos), ~3 GB of wheels
+.\install.ps1 -Cpu     # any machine, CPU wheels (~400 MB), Argos + online engines
+```
+
+The script creates `.venv` with `py -3.13`, installs the pinned requirements and the
+package itself (`pip install -e . --no-deps`). `-DryRun` prints the commands without
+running them. Requirements are pinned; `requirements.txt` pulls `torch==2.14.1+cu130`
+from the PyTorch CUDA index, `requirements-cpu.txt` lets `stanza` bring the CPU wheel.
+
+The CPU build has no `transformers`, so NLLB cannot load there: the app falls back to
+**Argos** and says so on the status line. Online engines work if you allow them.
+
+Manual install, if you prefer:
+
 ```bat
 py -3.13 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m pip install -e . --no-deps
 ```
-
-`requirements.txt` pins `torch==2.14.1+cu130` from the PyTorch CUDA index and
-`transformers<5` (5.x breaks the EnViT5 tokenizer and weight tying).
 
 ## Models
 

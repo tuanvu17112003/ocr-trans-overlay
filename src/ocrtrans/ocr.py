@@ -49,6 +49,27 @@ def _trim_edge_noise(text: str) -> str:
 
 
 MIN_TEXT_DENSITY = 5e-5
+TERMINAL_PUNCTUATION = ".!?…:;"
+
+
+def _is_label_pair(label: str, text: str) -> bool:
+    """True when `label` is a speaker name and `text` is the dialogue under it.
+
+    Game captions put the speaker above the line: a short, mostly capitalised
+    line with no closing punctuation, followed by a line that starts with a
+    capital. A wrapped sentence never looks like that (its first line is long
+    and sentence-cased, or its second line starts lowercase). Measured against
+    the layouts in scripts/ocr_layout_samples.py, where geometry alone merged
+    the name into the dialogue in every case.
+    """
+    words = label.split()
+    if not words or len(words) > 6 or label.rstrip().endswith(tuple(TERMINAL_PUNCTUATION)):
+        return False
+    capitalised = sum(1 for word in words if word[:1].isupper())
+    if capitalised / len(words) < 0.6:
+        return False
+    first_letter = next((char for char in text if char.isalpha()), "")
+    return first_letter.isupper()
 
 
 def _looks_like_text(rect: Rect, text: str) -> bool:
@@ -86,44 +107,97 @@ def group_blocks(
     kept.sort(key=lambda b: (b.rect.y, b.rect.x))
     line_h = _median([b.rect.h for b in kept])
 
-    groups: list[list[Box]] = []
-    for box in kept:
-        placed = False
-        if groups and len(groups[-1]) < max_lines:
-            group = groups[-1]
-            last = group[-1]
-            v_gap = box.rect.y - last.rect.bottom
-            h_gap = box.rect.x - last.rect.right
-            same_row = (
-                abs(box.rect.y - last.rect.y) <= 0.2 * line_h
-                and -0.4 * line_h <= h_gap <= 0.4 * line_h
-            )
-            first = group[0]
-            # Centred captions indent the second line by more than two line
-            # heights; what identifies one paragraph is horizontal overlap.
-            overlap = min(first.rect.right, box.rect.right) - max(first.rect.x, box.rect.x)
-            same_column = overlap >= 0.5 * min(first.rect.w, box.rect.w)
-            # A speaker name is typeset larger than the dialogue under it. Wrapped
-            # lines of one paragraph share the font, so their heights match; a big
-            # title must not inflate the gap it is measured against.
-            same_style = abs(box.rect.h - last.rect.h) <= 0.2 * max(box.rect.h, last.rect.h)
-            vertical = (
-                same_style
-                and -0.2 * last.rect.h <= v_gap <= max_gap_ratio * last.rect.h
-                and same_column
-            )
-            if same_row or vertical:
-                group.append(box)
-                placed = True
-        if not placed:
-            groups.append([box])
+    lines = _visual_lines(kept, line_h)
+    paragraphs: list[list[_Line]] = []
+    paragraph_of: dict[int, int] = {}
+    for index, line in enumerate(lines):
+        # Only the nearest line above in the same horizontal band can continue:
+        # a caption line between two others starts a new paragraph, and text in
+        # another column (HUD, panel) never becomes the neighbour.
+        neighbour = None
+        for previous in range(index - 1, -1, -1):
+            if _overlaps(lines[previous].rect, line.rect):
+                neighbour = lines[previous]
+                break
+        target = None
+        if neighbour is not None:
+            paragraph = paragraphs[paragraph_of[id(neighbour)]]
+            if len(paragraph) < max_lines and _continues(neighbour, line, max_gap_ratio):
+                target = paragraph
+        if target is None:
+            paragraph_of[id(line)] = len(paragraphs)
+            paragraphs.append([line])
+        else:
+            target.append(line)
+            paragraph_of[id(line)] = paragraph_of[id(neighbour)]
 
     blocks = []
-    for group in groups:
-        group.sort(key=lambda b: (b.rect.y, b.rect.x))
-        blocks.append(Block(rect=union_all([b.rect for b in group]), lines=group))
+    for paragraph in paragraphs:
+        members = [box for line in paragraph for box in line.boxes]
+        members.sort(key=lambda b: (b.rect.y, b.rect.x))
+        blocks.append(Block(rect=union_all([b.rect for b in members]), lines=members))
     blocks.sort(key=lambda b: (b.rect.y, b.rect.x))
     return blocks
+
+
+class _Line:
+    """Boxes that sit on one visual line."""
+
+    __slots__ = ("boxes",)
+
+    def __init__(self, box: Box) -> None:
+        self.boxes = [box]
+
+    @property
+    def rect(self) -> Rect:
+        return union_all([box.rect for box in self.boxes])
+
+    @property
+    def text(self) -> str:
+        return " ".join(box.text for box in self.boxes)
+
+
+def _visual_lines(boxes: list[Box], line_h: int) -> list[_Line]:
+    """Group boxes into lines; a line may hold several fragments side by side."""
+    lines: list[_Line] = []
+    for box in boxes:
+        for line in reversed(lines):
+            if _same_row(line.boxes[-1], box, line_h):
+                line.boxes.append(box)
+                break
+        else:
+            lines.append(_Line(box))
+    return lines
+
+
+def _same_row(prev: Box, box: Box, line_h: int) -> bool:
+    return (
+        abs(box.rect.y - prev.rect.y) <= 0.2 * line_h
+        and -0.4 * line_h <= box.rect.x - prev.rect.right <= 0.4 * line_h
+    )
+
+
+def _overlaps(a: Rect, b: Rect) -> bool:
+    overlap = min(a.right, b.right) - max(a.x, b.x)
+    return overlap >= 0.5 * min(a.w, b.w)
+
+
+def _continues(prev: _Line, line: _Line, max_gap_ratio: float) -> bool:
+    """True when `line` is the next wrapped line of the paragraph above it."""
+    a, b = prev.rect, line.rect
+    # A wrapped line keeps the font size; the speaker name above a dialogue does
+    # not, and must not inflate the gap it is measured against either.
+    if abs(b.h - a.h) > 0.2 * max(b.h, a.h):
+        return False
+    gap = b.y - a.bottom
+    if not (-0.2 * a.h <= gap <= max_gap_ratio * a.h):
+        return False
+    # Centred captions indent the next line by more than two line heights; what
+    # identifies one paragraph is horizontal overlap.
+    if not _overlaps(a, b):
+        return False
+    # A speaker name labels the line under it instead of continuing it.
+    return not _is_label_pair(prev.text, line.text)
 
 
 def _prepare_cuda_dlls() -> None:

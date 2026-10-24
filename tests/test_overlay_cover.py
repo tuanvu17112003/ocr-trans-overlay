@@ -99,14 +99,46 @@ def test_an_unchanged_snapshot_does_not_repaint(qapp):
 def test_the_overlay_window_shrinks_to_the_selected_region(qapp):
     overlay = OverlayWindow(Rect(0, 0, 2560, 1440), Config(), queue.Queue())
     overlay.set_regions([Rect(63, 1245, 1760, 53)])
-    assert overlay.screen_rect == Rect(55, 1237, 1776, 69)
+    assert overlay.screen_rect == Rect(55, 1237, 1776, 69 + overlay.GROW_PX)
     overlay.close()
 
 
 def test_damage_is_the_block_area_not_the_whole_screen(qapp):
     overlay = OverlayWindow(Rect(0, 0, 2560, 1440), Config(), queue.Queue())
-    damage = overlay._damage([], [make_item(rect=Rect(100, 200, 300, 60))])
+    item = make_item(rect=Rect(100, 200, 300, 60))
+    damage = overlay._damage([], [item])
     assert damage.width() <= 304
-    assert damage.height() <= 64
+    assert damage.height() <= item.rect.h + overlay.GROW_PX + 4
     assert damage.width() < 2560
+    overlay.close()
+
+
+def test_a_grown_cover_covers_the_extra_lines(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
+    tall = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 24))
+    overlay.show_items([tall])
+    layout = overlay._layouts[0]
+    assert layout.cover.h > 24
+    assert layout.cover.bottom <= overlay.screen_rect.bottom
+    overlay.close()
+
+
+def test_a_block_below_caps_the_growth(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
+    overlay.set_regions([Rect(80, 80, 240, 300)])
+    above = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 24))
+    below = RenderItem(
+        block_id=2, text="b", rect=Rect(100, 146, 200, 20), source_text="b", cached=False, line_px=20
+    )
+    overlay.show_items([above, below])
+    assert overlay._layouts[0].cover.h > 24
+    assert overlay._layouts[0].cover.bottom <= 142
+    overlay.close()
+
+
+def test_damage_covers_the_grown_box(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
+    item = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 24))
+    damage = overlay._damage([], [item])
+    assert damage.height() >= item.rect.h + overlay.GROW_PX
     overlay.close()
