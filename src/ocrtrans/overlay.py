@@ -1,8 +1,8 @@
-﻿"""Click-through overlay window that paints translated text over the source."""
+"""Click-through overlay window that paints translated text over the source."""
 
 from __future__ import annotations
 
-import ctypes
+
 import logging
 import queue
 import time
@@ -13,6 +13,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter
 from PyQt6.QtWidgets import QWidget
 
 from .config import Config
+from .exclusion import exclude_from_capture
 from .fit import fit_text
 from .geometry import Rect, union_all
 from .lifecycle import OverlayState
@@ -21,13 +22,6 @@ from .pipeline import PipelineEvent, RenderItem
 log = logging.getLogger(__name__)
 
 MARGIN_PX = 8
-
-WDA_EXCLUDEFROMCAPTURE = 0x00000011
-GWL_EXSTYLE = -20
-WS_EX_NOACTIVATE = 0x08000000
-WS_EX_TRANSPARENT = 0x00000020
-WS_EX_TOOLWINDOW = 0x00000080
-
 
 @dataclass
 class _Layout:
@@ -64,18 +58,6 @@ class QtMeasure:
         return round(self._metrics(font_px).height() * self.dpr)
 
 
-def _exclude_from_capture(hwnd: int) -> bool:
-    user32 = ctypes.windll.user32
-    user32.GetWindowLongPtrW.restype = ctypes.c_longlong
-    user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
-    user32.SetWindowLongPtrW.restype = ctypes.c_longlong
-    user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_longlong]
-    style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
-    style |= WS_EX_NOACTIVATE | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
-    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
-    return bool(user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE))
-
-
 class OverlayWindow(QWidget):
     def __init__(self, screen: Rect, config: Config, events_queue: queue.Queue) -> None:
         super().__init__()
@@ -105,7 +87,7 @@ class OverlayWindow(QWidget):
             round(screen.h / self.dpr),
         )
         self.show()
-        self.exclusion_ok = _exclude_from_capture(int(self.winId()))
+        self.exclusion_ok = exclude_from_capture(int(self.winId()))
         if not self.exclusion_ok:
             log.error("SetWindowDisplayAffinity failed; the overlay will be captured")
 

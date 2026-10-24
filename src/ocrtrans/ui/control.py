@@ -85,6 +85,7 @@ class ControlWindow(QWidget):
         self.delete_button.clicked.connect(self._delete_region)
         self.region_list.currentRowChanged.connect(lambda _row: self._refresh_region_buttons())
         self.mode.currentTextChanged.connect(lambda _mode: self.refresh_regions())
+        self.show_outlines = QCheckBox("Show outlines while running")
 
         self.start_button = QPushButton("Start")
         self.start_button.clicked.connect(self._toggle)
@@ -103,6 +104,7 @@ class ControlWindow(QWidget):
         form.addRow("", self.add_button)
         form.addRow("", self.adjust_button)
         form.addRow("", self.delete_button)
+        form.addRow("", self.show_outlines)
         form.addRow("Min font px", self.min_font)
         form.addRow("", self.start_button)
         form.addRow("Status", self.status_label)

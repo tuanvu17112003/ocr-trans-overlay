@@ -30,6 +30,7 @@ from .regions import RegionSet, from_physical
 from .scan import ScanBudget
 from .translate import Envit5Engine, NllbEngine, TranslationCache, TranslationService
 from .ui.control import ControlWindow
+from .ui.outline import RegionOutline
 from .ui.picker import pick_regions
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ def main() -> int:
     events: queue.Queue = queue.Queue()
     overlay = OverlayWindow(screen, cfg, events)
     overlay.hide()
+    outline = RegionOutline(screen)
 
     if os.environ.get("OCRTRANS_DXGI"):
         capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
@@ -227,6 +229,7 @@ def main() -> int:
             overlay.show()
         state["running"] = True
         window.set_running(True)
+        outline.set_visible_for(stopped=False, force=window.show_outlines.isChecked())
 
     def stop() -> None:
         pipeline = state["pipeline"]
@@ -236,6 +239,18 @@ def main() -> int:
         overlay.hide()
         state["running"] = False
         window.set_running(False)
+        refresh_outline()
+        outline.set_visible_for(stopped=True, force=window.show_outlines.isChecked())
+
+    def refresh_outline() -> None:
+        if not cfg.regions:
+            outline.set_regions([], None, set())
+            return
+        rects = RegionSet.from_config(cfg, screen)
+        applied = 1 if window.mode.currentText() == "single" else len(rects)
+        selected = window.selected_region()
+        active = selected if selected is not None and selected < len(rects) else None
+        outline.set_regions(rects, active, set(range(applied, len(rects))))
 
     def pick() -> None:
         overlay.hide()
@@ -253,6 +268,7 @@ def main() -> int:
             pipeline.set_regions(rects)
         overlay.set_regions(rects)
         window.refresh_regions()
+        refresh_outline()
 
     def apply_settings(new_cfg: Config) -> None:
         save_config(new_cfg)
@@ -271,6 +287,7 @@ def main() -> int:
             pipeline.set_regions(rects)
         overlay.set_regions(rects)
         window.refresh_regions()
+        refresh_outline()
 
     def shutdown() -> None:
         hotkeys.unregister_all()
@@ -278,6 +295,7 @@ def main() -> int:
         if pipeline is not None:
             pipeline.stop()
         overlay.close()
+        outline.close()
         hud.close()
         capture.close()
 
@@ -310,6 +328,10 @@ def main() -> int:
         on_close=app.quit,
     )
     window.show()
+    window.region_list.currentRowChanged.connect(lambda _row: refresh_outline())
+    window.mode.currentTextChanged.connect(lambda _mode: refresh_outline())
+    refresh_outline()
+    outline.set_visible_for(stopped=True, force=window.show_outlines.isChecked())
 
     try:
         hotkeys.register(cfg.keys or DEFAULT_KEYS, actions.put)
