@@ -141,7 +141,7 @@ Run the harness yourself:
   the next start is measured from the end of the previous pass and never faster than
   1.5x the last pass time), so background motion, video or a moving camera costs nothing.
   Capture grabs only when a pass is due (plus a 250 ms sample while empty), so the loop
-  costs ~15% of one core instead of a busy core. A screen with no text backs off to one
+  costs ~20% of one core instead of a busy core. A screen with no text backs off to one
   pass per second until a cheap 320 px luma diff says something changed. The status line
   shows `text N`, `shown N`, `tiled N`, `scan N ms` and `hidden N`.
 - Black-screen detection samples the whole monitor, not the OCR strip: an empty or dark

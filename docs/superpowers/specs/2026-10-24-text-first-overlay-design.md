@@ -130,8 +130,8 @@ tonemaps **only the region** (~1.3 ms). During the empty backoff it keeps a
 uses a 1/64 sample of the **full frame**: an empty or dark subtitle strip is
 normal and must not be mistaken for a black screen (which used to trip the WGC
 fallback needlessly). The WGC callback crops each arriving frame before copying.
-Measured on the same machine: idle capture CPU 90% -> ~15% of one core at 3.4
-grabs/s, OCR strip pass ~15-20 ms, EnViT5 batch of 3 ~193 ms / 614 MB VRAM.
+Measured on the same machine: idle capture CPU ~100% -> ~20% of one core at 3.4
+grabs/s, OCR strip pass ~15-40 ms, EnViT5 batch of 3 ~193 ms / 614 MB VRAM.
 
 - **At most one OCR pass in flight.** The capture thread does not grab while a
   frame is pending, so the pending frame is never replaced. This makes latency
