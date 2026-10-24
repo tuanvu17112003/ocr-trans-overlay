@@ -110,3 +110,25 @@ def test_single_mode_marks_extra_rows_inactive_without_deleting_them(qapp):
     assert window.region_list.count() == 2
     assert "inactive" in window.region_list.item(1).text()
     window.close()
+
+
+def test_read_config_persists_the_appearance(qapp):
+    window = make_window(Config())
+    window.set_appearance(
+        text_color="#FFE08A", bg_color="#000000", font_family="Consolas", min_font_px=14
+    )
+    cfg = window.read_config()
+    assert (cfg.text_color, cfg.bg_color, cfg.font_family, cfg.min_font_px) == (
+        "#FFE08A",
+        "#000000",
+        "Consolas",
+        14,
+    )
+    window.close()
+
+
+def test_theme_is_applied_once(qapp):
+    from ocrtrans.ui import theme
+
+    theme.apply(qapp)
+    assert theme.ACCENT in qapp.styleSheet()

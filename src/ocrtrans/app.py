@@ -32,6 +32,7 @@ from .translate import Envit5Engine, NllbEngine, TranslationCache, TranslationSe
 from .ui.control import ControlWindow
 from .ui.outline import RegionOutline
 from .ui.picker import pick_regions
+from .ui.theme import apply as apply_theme
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +94,7 @@ def main() -> int:
     setup_logging()
     cfg = load_config()
     app = QApplication(sys.argv)
+    apply_theme(app)
 
     screen_q = app.primaryScreen().geometry()
     screen = Rect(screen_q.x(), screen_q.y(), screen_q.width(), screen_q.height())

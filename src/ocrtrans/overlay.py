@@ -207,6 +207,8 @@ class OverlayWindow(QWidget):
         )
 
     def _recompute(self) -> None:
+        if self.measure.family != self.config.font_family:
+            self.measure = QtMeasure(self.config.font_family, self.dpr)
         self._layouts = [self._fit(item) for item in self._items]
 
     # ---- painting ---------------------------------------------------------
