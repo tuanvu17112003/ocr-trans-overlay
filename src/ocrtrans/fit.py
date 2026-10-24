@@ -23,34 +23,73 @@ class FitResult:
 
 
 def _wrap(text: str, width: int, font: int, measure: Measure) -> list[str]:
+    """Break at word boundaries with the least ragged layout.
+
+    Dynamic programming over the words; the last line is free except that a
+    single-word last line is penalised so no orphan is left behind. Words
+    wider than the box are hard-broken by character.
+    """
     words = text.split()
     if not words:
         return [""]
-    lines: list[str] = []
-    current = ""
+
+    atoms: list[str] = []
+    spaced: list[bool] = []  # space before this atom?
     for word in words:
-        candidate = f"{current} {word}".strip()
-        if measure.measure(candidate, font)[0] <= width:
-            current = candidate
-            continue
-        if current:
-            lines.append(current)
-            current = ""
         if measure.measure(word, font)[0] <= width:
-            current = word
+            atoms.append(word)
+            spaced.append(True)
             continue
-        # one word wider than the line: hard-break it
         chunk = ""
+        first = True
         for char in word:
-            if not chunk or measure.measure(chunk + char, font)[0] <= width:
-                chunk += char
-            else:
-                lines.append(chunk)
+            if chunk and measure.measure(chunk + char, font)[0] > width:
+                atoms.append(chunk)
+                spaced.append(first)
+                first = False
                 chunk = char
-        current = chunk
-    if current:
-        lines.append(current)
-    return lines
+            else:
+                chunk += char
+        if chunk:
+            atoms.append(chunk)
+            spaced.append(first)
+
+    widths = [measure.measure(atom, font)[0] for atom in atoms]
+    space = measure.measure(" ", font)[0]
+    count = len(atoms)
+    orphan_penalty = float(width * width * (count + 1))
+    best = [0.0] + [float("inf")] * count
+    start = [0] * (count + 1)
+    for end in range(1, count + 1):
+        line_w = widths[end - 1]
+        for begin in range(end - 1, -1, -1):
+            if begin < end - 1:
+                line_w += widths[begin] + (space if spaced[begin + 1] else 0)
+            if line_w > width:
+                break
+            if end == count:
+                cost = orphan_penalty if end - begin == 1 and count > 1 else 0.0
+            else:
+                cost = float((width - line_w) ** 2)
+            total = best[begin] + cost
+            if total < best[end]:
+                best[end] = total
+                start[end] = begin
+    if best[count] == float("inf"):
+        return atoms  # one character is wider than the box
+
+    lines: list[str] = []
+    end = count
+    while end > 0:
+        begin = start[end]
+        lines.append(
+            "".join(
+                (" " if spaced[index] and index > begin else "") + atoms[index]
+                for index in range(begin, end)
+            )
+        )
+        end = begin
+    return lines[::-1]
 
 
 def _ellipsize(line: str, width: int, font: int, measure: Measure) -> str:

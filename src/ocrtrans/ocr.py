@@ -95,10 +95,22 @@ class RapidOcrEngine:
         from rapidocr import RapidOCR
 
         try:
-            self._engine = RapidOCR(params={"EngineConfig.onnxruntime.use_cuda": self.use_cuda})
+            self._engine = RapidOCR(params=self._params(self.use_cuda))
         except Exception:  # noqa: BLE001 - CUDA missing must not kill the app
             self.use_cuda = False
-            self._engine = RapidOCR(params={"EngineConfig.onnxruntime.use_cuda": False})
+            self._engine = RapidOCR(params=self._params(False))
+
+    @staticmethod
+    def _params(use_cuda: bool) -> dict:
+        # HUD text is sparse and often faint, so thresholds sit below PaddleOCR's
+        # defaults; capping the long side keeps a full-screen region fast enough.
+        return {
+            "EngineConfig.onnxruntime.use_cuda": use_cuda,
+            "Det.limit_type": "max",
+            "Det.limit_side_len": 1280,
+            "Det.box_thresh": 0.3,
+            "Det.thresh": 0.2,
+        }
 
     def _ensure_loaded(self) -> None:
         if self._engine is None:
@@ -129,13 +141,26 @@ class RapidOcrEngine:
             crop = frame[rect.y : rect.bottom, rect.x : rect.right]
             if crop.size == 0:
                 continue
-            out = self._engine(crop, use_det=False, use_cls=False, use_rec=True)
-            texts = list(out.txts) if getattr(out, "txts", None) else []
-            scores = list(out.scores) if getattr(out, "scores", None) else []
-            text = " ".join(texts).strip()
+            # detect inside the crop: a paragraph block is several text lines and the
+            # recognition model only understands one line at a time
+            out = self._engine(crop, use_det=True, use_cls=False, use_rec=True)
+            lines = self._to_boxes(out, 1.0)
+            text = ""
+            score = 0.0
+            if lines:
+                lines.sort(key=lambda line: (line.rect.y, line.rect.x))
+                text = " ".join(line.text for line in lines).strip()
+                score = min(line.confidence for line in lines)
+            else:
+                # detection fails on very small crops; fall back to line recognition
+                out = self._engine(crop, use_det=False, use_cls=False, use_rec=True)
+                texts = list(out.txts) if getattr(out, "txts", None) else []
+                scores = list(out.scores) if getattr(out, "scores", None) else []
+                text = " ".join(texts).strip()
+                score = max(scores) if scores else 1.0
             if not text:
                 continue
-            boxes.append(Box(rect=rect, text=text, confidence=max(scores) if scores else 1.0))
+            boxes.append(Box(rect=rect, text=text, confidence=score))
         return boxes
 
     @staticmethod

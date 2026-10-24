@@ -115,7 +115,14 @@ Run the harness yourself:
   until its translation for the current text has arrived (no mismatched pairs).
 - Text is sized from the source line height and never painted outside the block: long
   Vietnamese shrinks to the font floor, then ends with an ellipsis (logged) instead of
-  covering neighbouring text.
+  covering neighbouring text. Lines are broken by dynamic programming over the words at
+  the current font size (least ragged fit, no one-word last line), so a block keeps the
+  largest font that still fits its box instead of accepting the first greedy wrap.
+- Detection runs with the long side capped at 1280 px and lower thresholds than the
+  PaddleOCR defaults, which reads faint HUD text and roughly halves full-frame OCR time
+  on a synthetic 2560x1440 scene (353 -> 171 ms, CPU onnxruntime). Re-reads of a known
+  block detect inside the crop, so a multi-line paragraph is not squashed into one
+  recognition line.
 - Paragraphs are merged up to 6 lines; two labels on the same row stay separate blocks.
 - A screen with no text is re-scanned about once per stability window instead of every
   frame, so an empty region does not spin the CPU or flood the log. The status line

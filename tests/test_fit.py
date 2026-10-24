@@ -39,3 +39,23 @@ def test_respects_font_floor_then_truncates():
     r = fit_text("x" * 400, Rect(0, 0, 100, 20), Rect(0, 0, 200, 100), MonoMeasure(), min_font_px=12)
     assert r.font_px == 12 and r.truncated is True
 
+
+
+def test_balanced_wrap_avoids_a_one_word_last_line():
+    r = fit_text("aaaa bbb ccc", Rect(0, 0, 70, 34), Rect(0, 0, 500, 500), MonoMeasure(), line_px=16)
+    assert r.lines == ["aaaa", "bbb ccc"]
+
+
+def test_wrapped_lines_keep_every_word_and_fit_the_width():
+    text = "the quick brown fox jumps over the lazy dog again and again"
+    measure = MonoMeasure()
+    for width in (80, 120, 160):
+        r = fit_text(text, Rect(0, 0, width, 200), Rect(0, 0, 800, 600), measure, line_px=20)
+        for line in r.lines:
+            assert measure.measure(line, r.font_px)[0] <= width
+        assert " ".join(r.lines) == text
+
+
+def test_overlong_word_is_split_not_dropped():
+    r = fit_text("short " + "x" * 60, Rect(0, 0, 80, 200), Rect(0, 0, 400, 400), MonoMeasure(), line_px=14)
+    assert "".join(r.lines).replace(" ", "") == "short" + "x" * 60
