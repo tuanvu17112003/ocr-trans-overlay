@@ -112,18 +112,19 @@ loop:
   frame, health = capture.grab(region)          # at fps while idle
   if frame is None: emit health, sleep to next tick; continue
   wake = changed_pixels_ratio(320px gray) > 0.01
-  if now < next_scan_at and not (wake and backed_off): sleep to next tick; continue
+  interval = budget.interval(fps, last_ocr_ms, empty_count, wake)   # single owner
+  if now - last_ocr_end < interval: sleep to next tick; continue
   scan_id += 1
   emit SCAN_START(frame, health, scan_id) -> ocr queue (depth 1)
-  # the OCR thread sets next_scan_at = ocr_end + interval when the pass ends
 ```
 
 - **At most one OCR pass in flight.** The capture thread does not grab while a
   frame is pending, so the pending frame is never replaced. This makes latency
   predictable: `latency <= interval + ocr_ms + mt_ms`.
-- `next_scan_at` is computed from the **end** of the previous pass:
-  `next_scan_at = ocr_end + interval`. While a pass runs, the capture thread
-  only runs the cheap wake check.
+- The wait is measured from the **end** of the previous pass
+  (`now - last_ocr_end`), and it is recomputed every idle tick from the same
+  `ScanBudget.interval` the tests call. A wake therefore shortens the wait to
+  the budget floor, never below it.
 - `health != OK` no longer skips the frame. The frame is used, the health is
   reported to the overlay (which holds the last cover for 1 s, then hides).
 - No `tracker.reset()` on fallback. A reset happens only on region change,
@@ -145,7 +146,8 @@ One pass = one full-region detection + recognition, plus grouping:
 5. Submit stable, changed texts to MT. Each item carries the exact source text
    and the `scan_id` that produced it. Selection: STABLE, >= 3 chars, exact
    text not already translated/in flight for this epoch, max 12 per pass by area.
-6. Record `ocr_end = clock()`; the budget uses the measured duration.
+6. Record `last_ocr_end = clock()` and `last_ocr_ms = last_ocr_end - pass_start`;
+   the budget uses both.
 
 Tiling rule (bounded): if the region's long side is > 1600 px, the scan runs on
 one capped frame (det long side 1280, as today). If a pass returns **zero**
@@ -208,11 +210,12 @@ code and test cannot drift apart.
 MIN_INTERVAL_S = 0.25
 OCR_HEADROOM = 1.5
 EMPTY_BACKOFF_S = 1.0
+EMPTY_PASSES = 3
 
 base = max(1.0 / fps, MIN_INTERVAL_S, OCR_HEADROOM * last_ocr_ms / 1000)
-if empty_count >= 3:
-    base = max(base, EMPTY_BACKOFF_S)
-interval = base            # a wake only cancels the empty backoff
+if empty_count >= EMPTY_PASSES and not wake:
+    base = max(base, EMPTY_BACKOFF_S)   # wake cancels the backoff, not the floor
+interval = base
 ```
 
 Pinned cases (fps 15):
@@ -220,12 +223,20 @@ Pinned cases (fps 15):
 | last_ocr_ms | empty_count | wake | interval |
 |---|---|---|---|
 | 300 | 0 | no | 0.450 s |
+| 300 | 0 | yes | 0.450 s |
 | 300 | 3 | no | 1.000 s |
 | 300 | 3 | yes | 0.450 s |
+| 852 | 3 | no | 1.278 s |
 | 852 | 3 | yes | 1.278 s |
 | 20 | 0 | no | 0.250 s |
+| 20 | 5 | no | 1.000 s |
 
-- Origin is the **end** of the previous pass: `next_scan_at = ocr_end + interval`.
+Every row is a parametrised test case against `ScanBudget.interval`; the table
+and the pseudocode are checked against the same function, so a code change that
+breaks a row fails the suite.
+
+- Origin is the **end** of the previous pass: the loop waits until
+  `now - last_ocr_end >= interval`.
 - The floor is `1.5 * last_ocr_ms`: an 852 ms pass means a >= 1.28 s interval
   even when a wake fires. A wake can remove the extra 1 s empty-screen backoff,
   never race the OCR worker.
@@ -320,9 +331,9 @@ Unit:
 - `test_block_memory_stability_uses_time_not_passes` (150/300 ms profiles).
 - `test_ttl_is_capped_at_one_second` — an 852 ms pass yields ttl 1.0 s, not
   1.7 s (same fake-clock helper as ScanBudget).
-- `test_scan_budget_matches_the_formula` (fake clock; a 300 ms pass yields
-  `max(1/fps, 0.25, 0.45)` = 450 ms at 15 fps, and the test asserts the value,
-  not a hand-rounded number) and empty-output backoff.
+- `test_scan_budget_matches_the_pinned_table` — parametrised over every row of
+  the 4.5 table, calling `ScanBudget.interval` (no hand-derived arithmetic in
+  the test).
 - `test_budget_never_below_measured_ocr_time` — an 852 ms pass plus a wake
   still yields an interval >= 1.28 s.
 - `test_pending_frame_is_not_replaced` — the capture thread does not grab while
@@ -419,9 +430,10 @@ low-VRAM machine, and it reuses `_OnlineBase`-like HTTP or a thin local class.
    painting without wiping the translation.
 5. Suppression is lifted only by a snapshot with `scan_id > suppressed_at_scan`,
    never by health alone: a stale cover cannot return after a capture gap.
-6. One OCR pass in flight; `next_scan_at = ocr_end + max(1/fps, 250 ms,
-   1.5*ocr_ms)`; a wake only cancels the empty-screen backoff and never goes
-   below the measured-OCR floor.
+6. One OCR pass in flight; the next pass may start only after
+   `ScanBudget.interval(fps, last_ocr_ms, empty_count, wake)` has elapsed since
+   the previous pass **ended**; a wake cancels the empty-screen backoff and
+   never goes below `1.5 * last_ocr_ms`.
 7. Empty-screen backoff is driven by scan results, with a cheap pixel wake
    signal (not a scheduler).
 8. Tiling only as a bounded rescue for large regions, never the default.
