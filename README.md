@@ -22,8 +22,8 @@ package itself (`pip install -e . --no-deps`). `-DryRun` prints the commands wit
 running them. Requirements are pinned; `requirements.txt` pulls `torch==2.14.1+cu130`
 from the PyTorch CUDA index, `requirements-cpu.txt` lets `stanza` bring the CPU wheel.
 
-The CPU build has no `transformers`, so NLLB is unavailable there: pick the **argos**
-engine (or an online engine). A later version falls back automatically.
+The CPU build has no `transformers`, so NLLB cannot load there: the app falls back to
+**Argos** and says so on the status line. Online engines work if you allow them.
 
 Manual install, if you prefer:
 

@@ -45,7 +45,7 @@ foreach ($step in $steps) {
 
 Write-Host ""
 if ($Cpu) {
-    Write-Host "Installed the CPU build. Pick the 'argos' engine in the window; NLLB needs the GPU build."
+    Write-Host "Installed the CPU build. The app falls back to the 'argos' engine; NLLB needs the GPU build."
 } else {
     Write-Host "Installed the CUDA build."
 }
