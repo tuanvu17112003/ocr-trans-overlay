@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from enum import Enum
@@ -181,6 +181,7 @@ class Pipeline:
         self._tiled = 0
         self._last_tiled_at = -1e9
         self._prev_tiled = False
+        self._scan_times: deque[float] = deque()
 
         self._ocr_passes = 0
         self._ocr_errors = 0
@@ -289,6 +290,8 @@ class Pipeline:
             "ocr_saturated": self._ocr_busy.is_set(),
             "mt_saturated": self._mt_queue.qsize() > 0,
             "tiled": self._tiled,
+            "scan_rate": round(len(self._scan_times) / 5.0, 1),
+            "last_scan_ms": round(self._last_ocr_ms, 2),
         }
 
     # ---- capture ----------------------------------------------------------
@@ -384,6 +387,10 @@ class Pipeline:
                 continue
             self._ocr_stats.add(self._last_ocr_ms, cached=False)
             self._ocr_passes += 1
+            now = self.clock()
+            self._scan_times.append(now)
+            while self._scan_times and now - self._scan_times[0] > 5.0:
+                self._scan_times.popleft()
             self._last_blocks = len(blocks)
             self._empty_count = 0 if blocks else self._empty_count + 1
             self.emit(

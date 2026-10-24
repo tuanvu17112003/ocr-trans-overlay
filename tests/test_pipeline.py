@@ -412,6 +412,18 @@ def test_stats_report_how_many_blocks_the_last_pass_found():
     p.stop()
 
 
+def test_stats_report_scan_rate_and_last_pass_duration():
+    p = pipeline_with(fps=60)
+    p.start()
+    assert p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT)
+    time.sleep(0.3)
+    stats = p.stats()
+    p.stop()
+    assert stats["scan_rate"] > 0
+    assert stats["last_scan_ms"] > 0
+    assert "tiled" in stats
+
+
 class BadEngine:
     name, kind = "bad", "local"
 

@@ -117,6 +117,8 @@ def main() -> int:
             "engine": state["engine_name"] or cfg.engine,
             "health": capture.health.name,
             "error": state["error"],
+            "rendered": overlay.shown,
+            "hidden_stale": overlay.state.hidden_stale,
         }
 
     hud = HudWindow(status)

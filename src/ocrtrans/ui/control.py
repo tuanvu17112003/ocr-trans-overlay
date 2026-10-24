@@ -138,10 +138,14 @@ class ControlWindow(QWidget):
         text = (
             f"engine {stats.get('engine', self.engine.currentText())}   "
             f"{stats.get('health', '-')}\n"
-            f"OCR {stats.get('ocr_passes', 0)} pass   "
+            f"OCR {stats.get('ocr_passes', 0)} pass "
+            f"({stats.get('scan_rate', 0):.1f}/s)   "
             f"text {stats.get('blocks', 0)}{error_text}   "
-            f"queue {stats.get('ocr_queue', 0)}   MT {stats.get('mt_queue', 0)}\n"
-            f"p50 {stats.get('p50', '-')} ms   p95 {stats.get('p95', '-')} ms"
+            f"shown {stats.get('rendered', 0)}   tiled {stats.get('tiled', 0)}\n"
+            f"queue {stats.get('ocr_queue', 0)}   MT {stats.get('mt_queue', 0)}   "
+            f"scan {stats.get('last_scan_ms', 0):.0f} ms\n"
+            f"p50 {stats.get('p50', '-')} ms   p95 {stats.get('p95', '-')} ms   "
+            f"hidden {stats.get('hidden_stale', 0)}"
         )
         if stats.get("error"):
             text += f"\n{stats['error']}"
