@@ -53,6 +53,44 @@ def test_background_fills_the_cover_with_opaque_color(qapp):
     overlay.close()
 
 
+def test_an_empty_pending_item_still_paints_the_cover(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
+    overlay.show_items([make_item(text="")])
+    image = overlay.grab().toImage()
+    for x, y in ((102, 102), (297, 177)):
+        color = image.pixelColor(x, y)
+        assert color.alpha() == 255, (x, y)
+        assert color.name() == Config().bg_color.lower(), (x, y, color.name())
+    overlay.close()
+
+
+def test_a_text_change_keeps_the_cover_opaque_while_pending(qapp):
+    from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent
+
+    events = queue.Queue()
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), events)
+    first = BlockView(1, Rect(100, 100, 200, 80), "Hello world", "stable", 20)
+    events.put(PipelineEvent(kind=EventKind.OCR_RESULT, epoch=1, at=0.0, scan_id=1, blocks=[first]))
+    events.put(
+        PipelineEvent(
+            kind=EventKind.TRANSLATION_RESULT,
+            epoch=1,
+            at=0.0,
+            scan_id=1,
+            items=[make_item(text="Xin chao")],
+        )
+    )
+    overlay._drain()
+    changed = BlockView(1, Rect(100, 100, 200, 80), "Hello worlds", "stable", 20)
+    events.put(PipelineEvent(kind=EventKind.OCR_RESULT, epoch=1, at=0.0, scan_id=2, blocks=[changed]))
+    overlay._drain()
+    assert overlay.shown == 1
+    assert overlay._layouts[0].lines == [""]
+    color = overlay.grab().toImage().pixelColor(120, 120)
+    assert color.alpha() == 255
+    overlay.close()
+
+
 def test_an_unchanged_snapshot_does_not_repaint(qapp):
     from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent
 

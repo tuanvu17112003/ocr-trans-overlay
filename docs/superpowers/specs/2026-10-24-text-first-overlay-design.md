@@ -42,9 +42,11 @@ Goals:
 - OCR a region of any content correctly while the background moves: subtitles,
   cutscenes, video, HUD.
 - The overlay never shows a translation for text that is no longer on screen.
-  A real text change hides the old cover at once; a block that stops being
-  detected is hidden after `ttl` (~2 passes), so a single false-negative pass
-  on a moving background does not strobe the overlay.
+  A real text change drops the old translation at once but keeps the cover
+  (opaque, no text) until the translation for the new text arrives, so neither
+  the source text nor the video flashes; a block that stops being detected is
+  hidden after `ttl` (~2 passes), so a single false-negative pass on a moving
+  background does not strobe the overlay.
 - Bound the cost: a fixed scan budget, independent of the number of blocks and
   of how much of the screen changes. No unbounded crop fan-out.
 - Keep the translation path, cache, engine switching, cover painting, exclusion
@@ -309,11 +311,14 @@ topmost and opaque inside each cover.
   After a 2 s gap where the subtitle changed A -> B, the returning snapshot
   carries B; A cannot repaint because B's exact text cleared A's translation
   before suppression was lifted.
-- Paint condition: `translated` non-empty, `translated_for == source` (exact,
-  normalised) and not suppressed.
-- A one-character OCR wobble clears that block's cover (English visible) until
-  a stable read and its translation arrive. Accepted trade: never show 100 HP
-  when the screen says 10 HP.
+- Paint condition: not suppressed, and either `translated` non-empty with
+  `translated_for == source` (exact, normalised), or the block has been covered
+  before (`covered`) and its new text is still pending: paint the cover with no
+  text instead of dropping it.
+- A one-character OCR wobble drops the old translation at once; the cover stays
+  opaque (empty) until a stable read and its translation arrive. Accepted
+  trade: never show 100 HP when the screen says 10 HP, and never flash the
+  source text or a fully transparent window over a video.
 
 Ordering invariant: one OCR worker and a monotonic `scan_id` per epoch. A pass
 that finishes late can never roll state back (dropped by `scan_id`), and an MT

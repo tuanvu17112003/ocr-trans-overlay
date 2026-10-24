@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import queue
 import sys
 from dataclasses import asdict
@@ -200,7 +201,8 @@ def main() -> int:
             pipeline.set_regions(rects)
             overlay.set_regions(rects)
             pipeline.set_enabled(True)
-        overlay.show()
+        if not os.environ.get("OCRTRANS_NO_OVERLAY"):
+            overlay.show()
         state["running"] = True
         window.set_running(True)
 
@@ -217,7 +219,8 @@ def main() -> int:
         overlay.hide()
         picked = pick_regions(screen)
         if state["running"]:
-            overlay.show()
+            if not os.environ.get("OCRTRANS_NO_OVERLAY"):
+                overlay.show()
         if not picked:
             return
         cfg.regions = [asdict(from_physical(rect, screen)) for rect in picked]

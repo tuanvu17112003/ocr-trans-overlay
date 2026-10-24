@@ -125,7 +125,10 @@ Run the harness yourself:
 - Multi-monitor capture uses the union rectangle of the selected regions.
 - The overlay covers the whole OCR block with an opaque background and draws the
   Vietnamese inside it: the English source is never visible, and a block stays hidden
-  until its translation for the current text has arrived (no mismatched pairs).
+  until its translation for the current text has arrived (no mismatched pairs). On a
+  text change the cover stays (opaque, no text) while the translation is in flight, so
+  the source text does not flash and the overlay never becomes fully transparent over
+  a playing video.
 - The overlay window is the size of the selected text region (plus 8 px), not the whole
   screen, and a change repaints only the changed block. A full-screen layered window
   makes the desktop compositor redo the whole video on every hide/show; the picture

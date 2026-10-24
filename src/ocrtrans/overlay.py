@@ -175,6 +175,8 @@ class OverlayWindow(QWidget):
         if ticked is not None:
             latest = ticked
         if latest != self._items:
+            if bool(latest) != bool(self._items):
+                log.info("overlay %s", "shown" if latest else "hidden")
             damage = self._damage(self._items, latest)
             self._items = latest
             self._recompute()
