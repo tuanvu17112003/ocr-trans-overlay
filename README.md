@@ -196,6 +196,23 @@ Run the harness yourself:
   window (fast 150 ms, safe 300 ms), so a typewriter dialogue appears after it settles,
   not while it is still animating.
 
+## Privacy and security
+
+- **No telemetry.** The app only connects to the network when an online engine is used.
+- **Local engines** (`argos`, `nllb`) run on this machine; captured text never leaves it.
+- **Online engines** (`google`, `gemini`, `deepl`, `mymemory`) send the recognised text to
+  that provider, and only after `Allow captured text to reach an online provider` is ticked.
+  The consent box resets per run.
+- **API keys** are stored in plain text in `%LOCALAPPDATA%\OCRTrans\config.json`. The file
+  stays on this machine; never copy it into a repository or a bug report.
+- **Capture** uses Windows Graphics Capture (Desktop Duplication as a fallback). The overlay
+  and the region outline set `WDA_EXCLUDEFROMCAPTURE`, so they do not show up in screen
+  recordings of their own windows. Use this only on content you are allowed to view: apps
+  protected by DRM or by an anti-cheat may refuse capture, and some consider capture
+  exclusion against their terms.
+- **Hotkeys** are registered with `RegisterHotKey`. The app does not inject into other
+  processes, read their memory, or install global mouse hooks.
+
 ## Tests
 
 ```bat
@@ -206,3 +223,7 @@ Run the harness yourself:
 
 The real suite captures the running Gunfire Reborn window, runs real OCR and NLLB, and
 fails if a pipeline thread dies. Without `--run-real` (or with the game closed) it skips.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
