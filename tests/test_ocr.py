@@ -252,3 +252,19 @@ def test_a_five_word_name_is_still_a_label():
         Box(Rect(314, 88, 350, 38), "The gate opens at dawn.", 1.0),
     ]
     assert len(group_blocks(boxes)) == 2
+
+
+def test_two_columns_merge_within_their_own_column():
+    # Measured case I: a quest tracker on the left and a resource panel on the
+    # right; each column is one paragraph, and they never join.
+    boxes = [
+        Box(Rect(34, 39, 223, 37), "Quest: find the key", 0.976),
+        Box(Rect(694, 41, 93, 32), "HP 100", 1.0),
+        Box(Rect(35, 79, 211, 34), "Reward: 300 gold", 1.0),
+        Box(Rect(695, 80, 120, 31), "Ammo 30", 1.0),
+    ]
+    blocks = group_blocks(boxes)
+    assert [b.text for b in blocks] == [
+        "Quest: find the key Reward: 300 gold",
+        "HP 100 Ammo 30",
+    ]

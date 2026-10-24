@@ -26,6 +26,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 NAME_TEXT = "Beleaguered Celestial"
+DIALOGUE_TEXT = "Oh, what am I supposed to do now..."
 DIALOGUE_START = "Oh, what am I supposed to do now"
 WRAP_1 = "Not what you would expect from a Sentinel, is it?"
 WRAP_2 = "But that's exactly why, through all this,"
@@ -34,10 +35,54 @@ OCR_PREFIX = "ocr text: "
 
 
 # ---------------------------------------------------------------- scene side
+def _game_frame(size: tuple[int, int], name_line: str | None, body_lines: list[str]):
+    """A busy in-game frame: artwork, HUD corners, prompt, and the caption."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    width, height = size
+    image = Image.new("RGB", (width, height), (44, 35, 30))
+    draw = ImageDraw.Draw(image, "RGBA")
+    for y in range(height):
+        t = y / max(1, height - 1)
+        draw.line([(0, y), (width, y)], fill=(int(46 + 26 * t), int(34 + 20 * t), int(28 + 16 * t)))
+    draw.ellipse((-200, -150, 900, 700), fill=(120, 90, 70, 90))
+    draw.ellipse((width - 700, -100, width + 300, 600), fill=(90, 70, 110, 80))
+    draw.polygon(
+        [(width * 0.44, height), (width * 0.56, height), (width * 0.5, height * 0.15)],
+        fill=(170, 40, 40, 90),
+    )
+    hud = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf", 24)
+    draw.text((60, 40), "Quest: find the Sentinel", font=hud, fill=(232, 232, 232))
+    draw.text((60, 78), "Reward: 300 gold", font=hud, fill=(232, 232, 232))
+    draw.text((width - 260, 40), "HP 100", font=hud, fill=(232, 232, 232))
+    draw.text((width - 260, 78), "MP 50", font=hud, fill=(232, 232, 232))
+    draw.text((width - 90, height - 130), "F", font=ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf", 34), fill=(240, 240, 240))
+
+    y = int(height * 0.42)
+    if name_line:
+        font = ImageFont.truetype("C:/Windows/Fonts/georgiab.ttf", 40)
+        box = draw.textlength(name_line, font=font)
+        draw.text(((width - box) / 2, y), name_line, font=font, fill=(240, 220, 170))
+        y += 58
+    body = ImageFont.truetype("C:/Windows/Fonts/segoeuib.ttf", 30)
+    for line in body_lines:
+        box = draw.textlength(line, font=body)
+        draw.text(((width - box) / 2, y), line, font=body, fill=(240, 240, 240))
+        y += 62
+    return image
+
+
 def scene_image(name: str, size: tuple[int, int]):
     from PIL import Image, ImageFont
 
     from ocr_layout_samples import case_title_dialogue, case_wrapped, canvas, centered
+
+    if name == "game":
+        return _game_frame(size, NAME_TEXT, [DIALOGUE_TEXT])
+    if name == "game2":
+        return _game_frame(size, NAME_TEXT, [DIALOGUE_TEXT, "Nothing left to say."])
+    if name == "game_long":
+        return _game_frame(size, None, [LONG_TEXT])
 
     if name == "name":
         base = case_title_dialogue(30)
@@ -176,7 +221,7 @@ def report(name: str, lines: list[str], scans: list[list[tuple[int, int, str]]])
     if noise:
         print(f"  note: {noise} blocks from outside the caption (other windows on screen)")
 
-    if name == "name":
+    if name in ("name", "game", "game2"):
         bad = [
             scan
             for scan in scans
@@ -188,6 +233,27 @@ def report(name: str, lines: list[str], scans: list[list[tuple[int, int, str]]])
             if any(t.strip() == NAME_TEXT for _w, _h, t in scan)
             and any(DIALOGUE_START in t for _w, _h, t in scan)
         ]
+        if name == "game2":
+            merged_dialogue = [
+                scan
+                for scan in scans
+                if any(DIALOGUE_START in t and "Nothing left to say" in t for _w, _h, t in scan)
+            ]
+            if not merged_dialogue:
+                print("FAIL: the two dialogue lines were not one block")
+                ok = False
+            else:
+                print(f"PASS: {len(merged_dialogue)} scans kept the two dialogue lines together")
+        hud_leak = [
+            scan
+            for scan in scans
+            for _w, _h, t in scan
+            if DIALOGUE_START in t and ("HP 100" in t or "300 gold" in t)
+        ]
+        if hud_leak:
+            print("FAIL: HUD text was merged into the caption")
+            print(f"  {hud_leak[0]!r}")
+            ok = False
         if bad:
             print("FAIL: the speaker name is merged into the dialogue")
             print(f"  {[t for _w, _h, t in bad[0]][:4]!r}")
@@ -198,10 +264,14 @@ def report(name: str, lines: list[str], scans: list[list[tuple[int, int, str]]])
             print("FAIL: never saw both lines in one scan")
             ok = False
     elif name == "wrapped":
+        # The debug line truncates block text at 60 chars, so match the head of
+        # each line and require the block to be taller than one line.
         good = [
             scan
             for scan in scans
-            if any(WRAP_1[:15] in t and "But that's exactly" in t for _w, _h, t in scan)
+            if any(
+                WRAP_1[:15] in t and "But that" in t and h > 55 for _w, h, t in scan
+            )
         ]
         if good:
             print(f"PASS: {len(good)} scans saw the two-line caption as one block")
@@ -210,7 +280,7 @@ def report(name: str, lines: list[str], scans: list[list[tuple[int, int, str]]])
             for scan in scans[-1:]:
                 print(f"  {[t[:50] for _w, _h, t in scan]!r}")
             ok = False
-    elif name == "long":
+    elif name in ("long", "game_long"):
         good = [scan for scan in scans if any(LONG_TEXT[:15] in t for _w, _h, t in scan)]
         if good:
             print(f"PASS: the long caption was read in {len(good)} scans without an ellipsis")
@@ -272,8 +342,10 @@ def main() -> int:
     region = config_region()
     print(f"region: {region}")
     keep = "--keep-open" in sys.argv
-    results = [check_scene(name, region, keep) for name in ("name", "wrapped", "long")]
-    print("\nSUMMARY:", "PASS" if all(results) else "FAIL", results)
+    scenes = sys.argv[1:] if "--keep-open" not in sys.argv[1:] else sys.argv[1:-1]
+    scenes = [s for s in scenes if not s.startswith("-")] or ["name", "wrapped", "long"]
+    results = [check_scene(name, region, keep) for name in scenes]
+    print("\nSUMMARY:", "PASS" if all(results) else "FAIL", dict(zip(scenes, results)))
     return 0 if all(results) else 1
 
 
