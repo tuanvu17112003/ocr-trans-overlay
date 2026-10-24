@@ -24,7 +24,7 @@
 2. A block at the bottom edge of the screen still truncates, without a negative height — Task 1.
 3. The overlay window reserves the growth band and the repaint damage includes it — Task 1.
 4. The primary monitor is chosen by the `MONITORINFOF_PRIMARY` flag, the size guard falls back once, and the DXGI path is untouched — Task 2.
-5. The CPU install is pinned, has no CUDA index, installs the package editable, and NLLB falls back to Argos instead of starting with an error — Tasks 3 and 4.
+5. The CPU install is pinned, has no CUDA index, installs the package editable, and NLLB falls back to a **loaded** Argos instead of an engine that raises on every call — Tasks 3 and 4.
 
 ---
 
@@ -37,16 +37,16 @@
 
 **Interfaces:**
 - Produces: `fit_text(text, source, screen, measure, *, line_px=0, min_font_px=12, limit_bottom: int | None = None) -> FitResult`; the allowed height is `max(1, (limit_bottom or source.bottom) - source.y)`.
-- Produces in `overlay.py`: `GROW_PX_LINES = 2`; `_Layout.cover` is `Rect(item.rect.x, item.rect.y, item.rect.w, max(item.rect.h, fitted_h))`.
+- Produces in `overlay.py`: `self.GROW_PX = 2 * config.min_font_px + 8` (set in `__init__`); `_Layout.cover` is `Rect(item.rect.x, item.rect.y, item.rect.w, max(item.rect.h, fitted_h))`.
 
 - [ ] **Step 1: Write the failing tests**
 
-In `tests/test_fit.py` (uses the existing `MonoMeasure`):
+In `tests/test_fit.py` (uses the existing `MonoMeasure`; a 40 px box already fits two lines, so the tight fixture is 30 px):
 
 ```python
 def test_limit_bottom_avoids_the_ellipsis():
     text = "một hai ba bốn năm sáu bảy tám chín mười"
-    box = Rect(0, 400, 200, 40)
+    box = Rect(0, 400, 200, 30)
     screen = Rect(0, 0, 1920, 1080)
     tight = fit_text(text, box, screen, MonoMeasure(), min_font_px=12)
     roomy = fit_text(text, box, screen, MonoMeasure(), min_font_px=12, limit_bottom=400 + 90)
@@ -58,7 +58,7 @@ def test_limit_bottom_avoids_the_ellipsis():
 def test_limit_bottom_is_never_crossed():
     text = "một hai ba bốn năm sáu bảy tám chín mười"
     roomy = fit_text(
-        text, Rect(0, 400, 200, 40), Rect(0, 0, 1920, 1080), MonoMeasure(),
+        text, Rect(0, 400, 200, 30), Rect(0, 0, 1920, 1080), MonoMeasure(),
         min_font_px=12, limit_bottom=450,
     )
     assert roomy.rect.bottom <= 450
@@ -66,20 +66,20 @@ def test_limit_bottom_is_never_crossed():
 
 def test_no_limit_bottom_keeps_the_source_box():
     text = "một hai ba bốn năm sáu bảy tám chín mười"
-    box = Rect(0, 400, 200, 40)
+    box = Rect(0, 400, 200, 30)
     result = fit_text(text, box, Rect(0, 0, 1920, 1080), MonoMeasure(), min_font_px=12)
     assert result.rect.bottom <= box.bottom
 ```
 
-In `tests/test_overlay_cover.py`:
+In `tests/test_overlay_cover.py` (a 24 px block with that text grows under real Qt metrics):
 
 ```python
 def test_a_grown_cover_covers_the_extra_lines(qapp):
     overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
-    tall = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 40))
+    tall = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 24))
     overlay.show_items([tall])
     layout = overlay._layouts[0]
-    assert layout.cover.h >= 40
+    assert layout.cover.h > 24
     assert layout.cover.bottom <= overlay.screen_rect.bottom
     overlay.close()
 
@@ -88,22 +88,26 @@ def test_a_block_below_caps_the_growth(qapp):
     cfg = Config()
     overlay = OverlayWindow(Rect(0, 0, 800, 600), cfg, queue.Queue())
     overlay.set_regions([Rect(80, 80, 240, 300)])
-    above = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 40))
+    above = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 24))
     below = RenderItem(block_id=2, text="b", rect=Rect(100, 146, 200, 20), source_text="b", cached=False, line_px=20)
     overlay.show_items([above, below])
-    assert overlay._layouts[0].cover.bottom <= 146
+    assert overlay._layouts[0].cover.h > 24
+    assert overlay._layouts[0].cover.bottom <= 142
     overlay.close()
 
 
 def test_damage_covers_the_grown_box(qapp):
     overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
-    item = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 40))
+    item = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 24))
     damage = overlay._damage([], [item])
     assert damage.height() >= item.rect.h + overlay.GROW_PX
     overlay.close()
 ```
 
-The existing geometry test at `tests/test_overlay_cover.py:102` expects the old bottom margin; update its expected rect to include the growth band.
+Two existing assertions move with the change: the geometry expectation at
+`tests/test_overlay_cover.py:102` gains the bottom growth band, and the
+`damage.height() <= 64` check at `:110` becomes
+`<= item.rect.h + overlay.GROW_PX + 4`, keeping its "not the whole screen" intent.
 
 - [ ] **Step 2: Run them and confirm failure**
 
@@ -146,7 +150,7 @@ git commit -m "fix: let a translated caption grow instead of being cut"
 - Produces: `enumerate_monitors() -> list[tuple[Rect, bool]]` (Win32, rect in **physical** pixels, `True` for the primary). Physical because the size guard compares it with the captured frame, which is never scaled.
 - Produces: `primary_monitor_index(monitors: list[tuple[Rect, bool]], fallback: int = 1) -> int`.
 - Produces: `monitor_size_matches(frame_wh: tuple[int, int], monitor: Rect) -> bool`.
-- `WgcBackend` gains `self.monitor_mismatch: bool` and rebuilds once with index 1 when the first frame's size does not match.
+- Produces: `WgcBackend(..., monitor_rect: Rect | None = None)`; it gains `self.monitor_mismatch: bool`, a `self._retry_requested: bool` flag set from the frame callback, and `grab()` performs the single rebuild with index 1. Teardown never runs on the capture thread (see `capture.py:95-99`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -177,6 +181,18 @@ def test_frame_size_must_match_the_monitor():
 Note the rects here are the physical Win32 rects, so a 125% display does not trip the
 guard.
 
+```python
+from ocrtrans.capture import needs_monitor_retry
+
+
+def test_retry_happens_once_on_a_size_mismatch():
+    rect = Rect(0, 0, 1920, 1080)
+    assert needs_monitor_retry((2560, 1440), rect, already_retried=False) is True
+    assert needs_monitor_retry((2560, 1440), rect, already_retried=True) is False
+    assert needs_monitor_retry((1920, 1080), rect, already_retried=False) is False
+    assert needs_monitor_retry((2560, 1440), None, already_retried=False) is False
+```
+
 - [ ] **Step 2: Run and confirm failure**
 
 Run: `.venv/Scripts/python -m pytest tests/test_capture.py -q`
@@ -184,9 +200,11 @@ Expected: FAIL — the names do not exist.
 
 - [ ] **Step 3: Implement**
 
-- `capture.py`: the two pure helpers; `enumerate_monitors()` using `ctypes` `EnumDisplayMonitors` + `GetMonitorInfoW` (return `[]` on any failure, so the caller falls back).
-- `WgcBackend.__init__` keeps `monitor_index`; `_store_frame` on the first frame calls `monitor_size_matches((width, height), self._monitor_rect)`; on a mismatch and when not already retried, log an error, set `monitor_mismatch`, stop the session and rebuild with index 1. Keep the retry flag to one.
-- `app.py`: `monitors = enumerate_monitors()`, `monitor_index = primary_monitor_index(monitors)`, log `capture monitor %s (%s)` once, and pass it to both `WgcBackend(...)` calls. Stats gain `monitor_mismatch` from the backend's attribute (default `False` when the backend lacks it).
+- `capture.py`: the two pure helpers plus `needs_monitor_retry(frame_wh, monitor_rect, already_retried) -> bool`; `enumerate_monitors()` using `ctypes` `EnumDisplayMonitors` + `GetMonitorInfoW` (return `[]` on any failure, so the caller falls back).
+- `WgcBackend.__init__` takes `monitor_rect`; `_store_frame` only sets `self._retry_requested = needs_monitor_retry(...)` when the first frame mismatches, and logs once. `grab()` sees the flag before waiting on the next frame, tears down and rebuilds the session with index 1, sets `monitor_mismatch = True`, and clears the flag. Nothing stops or rebuilds the session from the capture thread.
+- The two tests that build the backend with `WgcBackend.__new__` (`tests/test_capture.py:91-103`, `157-171`) get `backend._monitor_rect = None` and `backend._retry_requested = False` so the new fields exist.
+- `app.py`: `monitors = enumerate_monitors()`, `monitor_index = primary_monitor_index(monitors)`, `monitor_rect` = that entry's rect, log `capture monitor %s (%s)` once, pass both to the two `WgcBackend(...)` calls.
+- `status()` (`app.py:157-164`) gains `"monitor_mismatch": getattr(capture.main, "monitor_mismatch", False)`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -216,7 +234,7 @@ git commit -m "fix: capture the primary monitor by identity"
 - Test: `tests/test_packaging.py`
 
 **Interfaces:**
-- Produces: `requirements-cpu.txt` — same pins as `requirements.txt` but `onnxruntime`, no `transformers`, no `--extra-index-url`.
+- Produces: `requirements-cpu.txt` with exactly: `numpy==2.5.4`, `opencv-python==5.0.0.93`, `windows-capture==2.0.1`, `rapidocr==3.10.0`, `onnxruntime==1.31.0`, `sentencepiece==0.2.2`, `argostranslate==1.11.0`, `requests==2.34.2`, `PyQt6==6.11.0`, `pytest==9.1.1`. No extra index, no `torch` line (it arrives as the CPU wheel through `stanza`), no `transformers`, no `onnxruntime-gpu`.
 - Produces: `install.ps1 [-Cpu] [-DryRun]`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -260,7 +278,20 @@ def test_installer_parses():
     script = (ROOT / "install.ps1").read_text(encoding="utf-8")
     assert "-Cpu" in script and "-DryRun" in script
     assert "pip install -e . --no-deps" in script
+
+
+def test_installer_is_valid_powershell():
+    if shutil.which("powershell") is None:
+        pytest.skip("no PowerShell on this machine")
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "$null = [scriptblock]::Create((Get-Content -Raw -LiteralPath 'install.ps1'))"],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
 ```
+
+(`import shutil, subprocess, pytest` at the top of the file.)
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -269,7 +300,7 @@ Expected: FAIL — the files do not exist.
 
 - [ ] **Step 3: Implement**
 
-- `requirements-cpu.txt`: copy the pinned list, drop `--extra-index-url`, `transformers` and the `torch` line, replace `onnxruntime-gpu==1.31.0` with `onnxruntime==1.31.0`.
+- `requirements-cpu.txt`: exactly the list in the Interfaces block (write it out; do not copy the GPU file).
 - `install.ps1`:
   - param block with `[switch]$Cpu` and `[switch]$DryRun`;
   - check `py -3.13 --version`, else write an error naming the winget/store requirement and exit 1;
@@ -297,24 +328,30 @@ git commit -m "feat: CPU requirements and a one-command installer"
 ### Task 4: Fall back to Argos when NLLB cannot load
 
 **Files:**
-- Modify: `src/ocrtrans/app.py:52-58` (`build_local`) or `build_engine`
+- Modify: `src/ocrtrans/app.py:61-95` (one guarded `build_local` helper), `load_engine` (status line)
 - Test: `tests/test_config.py`
 
 **Interfaces:**
-- Produces: `build_engine(cfg)` returns `ArgosEngine` when `cfg.engine == "nllb"` and the NLLB build raises `ImportError`; logs once.
+- Produces: `local_engine(name: str)` — the single place that calls `build_local`, with the NLLB→Argos fallback. `build_engine`, the online fallback (`app.py:81`) and the `fallback_to_local` path (`app.py:92`) all use it.
+- Produces: the fallback engine is **loaded** before it is returned (`ArgosEngine.translate` raises until `load()`), and `load_engine` sets `state["error"] = "nllb unavailable; using argos"` when the returned engine's name differs from `cfg.engine`.
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 def test_nllb_falls_back_to_argos_without_transformers(monkeypatch):
     from ocrtrans import app as app_module
+    from ocrtrans.argos import ArgosEngine
+
+    loaded: list[bool] = []
 
     def boom(name):
         raise ImportError("no transformers")
 
     monkeypatch.setattr(app_module, "build_local", boom)
+    monkeypatch.setattr(ArgosEngine, "load", lambda self: loaded.append(True))
     engine = app_module.build_engine(Config(engine="nllb"))
     assert engine.name == "argos"
+    assert loaded == [True]
 ```
 
 - [ ] **Step 2: Run and confirm failure**
@@ -324,17 +361,27 @@ Expected: FAIL — the ImportError propagates.
 
 - [ ] **Step 3: Implement**
 
-In `build_engine`, wrap the `LOCAL_REPOS` branch:
+In `app.py`, above `build_engine`:
 
 ```python
-    if cfg.engine in LOCAL_REPOS:
-        try:
-            return build_local(cfg.engine)
-        except ImportError:
-            log.warning("%s needs transformers; using argos", cfg.engine)
-            from .argos import ArgosEngine
+def local_engine(name: str):
+    try:
+        return build_local(name)
+    except ImportError:
+        log.warning("%s needs transformers; using argos", name)
+        from .argos import ArgosEngine
 
-            return ArgosEngine()
+        engine = ArgosEngine()
+        engine.load()
+        return engine
+```
+
+Replace all three `build_local(...)` call sites with `local_engine(...)`, and in
+`load_engine`, after a successful build:
+
+```python
+    if engine.name != config.engine:
+        state["error"] = f"{config.engine} unavailable; using {engine.name}"
 ```
 
 - [ ] **Step 4: Run the tests**
@@ -356,5 +403,7 @@ git commit -m "feat: fall back to argos when nllb cannot load"
 ## Self-review notes
 
 - Spec coverage: Part 1 → Task 1, Part 2 → Task 2, Part 3 → Task 3, Part 4 → Task 4.
-- Review Focus items map to tests: 1–3 in Task 1, 4 in Task 2, 5 in Tasks 3–4.
+- Review Focus items map to tests: 1–3 in Task 1, 4 in Task 2 (including `needs_monitor_retry`), 5 in Tasks 3–4.
 - The GPU install path is unchanged except `install.ps1`; no engine or pipeline behaviour moves.
+- External review round (production-plan-audit, NO-GO) closed: the tight fit fixture now actually truncates (h=30), the Argos fallback is loaded, every `build_local` call site goes through `local_engine`, the monitor rect is passed in, the retry is decided in `grab()` (never on the capture thread), and the two existing overlay assertions that the growth affects are named.
+- Deliberately unverified: the library's monitor ordering on a two-monitor machine, `onnxruntime==1.31.0` on PyPI, and a real CPU-only install; each fails loudly rather than silently.
