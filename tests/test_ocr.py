@@ -101,3 +101,15 @@ def test_merge_boxes_keeps_the_higher_confidence_duplicate():
     b = Box(Rect(2, 1, 100, 20), "HELLO", 0.9)
     merged = merge_boxes([a, b])
     assert len(merged) == 1 and merged[0].confidence == 0.9
+
+
+def test_cpu_fallback_caps_the_onnx_thread_count():
+    params = RapidOcrEngine._params(False)
+    assert params["EngineConfig.onnxruntime.intra_op_num_threads"] == 2
+    assert params["EngineConfig.onnxruntime.inter_op_num_threads"] == 1
+
+
+def test_gpu_params_keep_the_same_thread_cap():
+    params = RapidOcrEngine._params(True)
+    assert params["EngineConfig.onnxruntime.use_cuda"] is True
+    assert params["EngineConfig.onnxruntime.intra_op_num_threads"] == 2

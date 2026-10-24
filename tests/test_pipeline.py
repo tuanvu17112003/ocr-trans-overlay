@@ -519,3 +519,40 @@ def test_translation_failure_is_counted_not_silent():
     stats = p.stats()
     p.stop()
     assert stats["mt_errors"] >= 1
+
+
+class CountingOcr(FakeOcr):
+    def __init__(self, boxes=None):
+        super().__init__(boxes)
+        self.calls = 0
+
+    def read(self, frame):
+        self.calls += 1
+        return super().read(frame)
+
+
+def test_a_thin_strip_never_runs_the_tiled_rescue():
+    ocr = CountingOcr(boxes=[])
+    p = pipeline_with(
+        capture=FakeCapture(np.zeros((53, 1760, 3), np.uint8)),
+        ocr=ocr,
+        region=Rect(0, 0, 1760, 53),
+        fps=60,
+    )
+    p.start()
+    time.sleep(1.2)
+    stats = p.stats()
+    p.stop()
+    assert stats["ocr_passes"] >= 2
+    assert stats["tiled"] == 0, "a wide subtitle strip was split into tiles"
+    assert ocr.calls == stats["ocr_passes"], "a miss re-read the strip in tiles"
+
+
+def test_a_stable_text_set_scans_at_half_rate():
+    p = pipeline_with(fps=60)
+    p.start()
+    time.sleep(3.0)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert passes >= 5
+    assert passes <= 9, "a static snapshot kept the full 4 passes/s"

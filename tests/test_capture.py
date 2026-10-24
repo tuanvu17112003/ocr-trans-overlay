@@ -125,3 +125,11 @@ def test_a_black_full_frame_still_trips_the_fallback():
     for _ in range(3):
         m.grab(Rect(0, 0, 4, 4))
     assert m.grab(Rect(0, 0, 4, 4))[1] == Health.WGC_FALLBACK
+
+
+def test_dxgi_close_drops_the_session_on_the_calling_thread():
+    backend = DxgiBackend()
+    backend._session = object()
+    backend.close()
+    assert backend._session is None
+    assert backend._closed is True

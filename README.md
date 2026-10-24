@@ -133,20 +133,27 @@ Run the harness yourself:
   largest font that still fits its box instead of accepting the first greedy wrap.
 - Detection runs with the long side capped at 1280 px and lower thresholds than the
   PaddleOCR defaults, which reads faint HUD text and roughly halves full-frame OCR time
-  on a synthetic 2560x1440 scene (353 -> 171 ms, CPU onnxruntime). A region whose long side
-  exceeds 1600 px gets one bounded tiled rescue pass (max 2x2 tiles, 64 px overlap, at most once
-  per 2 s) only when a single pass finds nothing.
+  on a synthetic 2560x1440 scene (353 -> 171 ms, CPU onnxruntime). A large region whose long
+  side exceeds 1600 px gets one bounded tiled rescue pass (max 2x2 tiles, 64 px overlap, at most
+  once per 2 s) only when a single pass finds nothing. Tiles are skipped for wide, short
+  strips (under 200 px tall): 20 px captions already survive the cap, and tiling a
+  subtitle strip only tripled the OCR work at the moment of a miss.
 - Paragraphs are merged up to 6 lines; two labels on the same row stay separate blocks.
 - Scans are text-first: the full region is OCR'd at a fixed budget (one pass in flight,
   the next start is measured from the end of the previous pass and never faster than
   1.5x the last pass time), so background motion, video or a moving camera costs nothing.
-  Capture grabs only when a pass is due (plus a 250 ms sample while empty), so the loop
-  costs ~20% of one core instead of a busy core. A screen with no text backs off to one
-  pass per second until a cheap 320 px luma diff says something changed. The status line
-  shows `text N`, `shown N`, `tiled N`, `scan N ms` and `hidden N`.
+  While the text set is unchanged it scans at 2 passes/s instead of 4, so a caption that
+  sits on screen for seconds costs half as much. Capture grabs only when a pass is due
+  (plus a 250 ms sample while empty), so the loop costs ~20% of one core instead of a busy
+  core. A screen with no text backs off to one pass per second until a cheap 320 px luma
+  diff says something changed. The status line shows `text N`, `shown N`, `tiled N`,
+  `scan N ms` and `hidden N`.
 - Black-screen detection samples the whole monitor, not the OCR strip: an empty or dark
   subtitle area is normal and no longer trips the WGC fallback. The overlay itself is
   excluded from capture, so it never feeds back into OCR.
+- OCR logs its execution provider once at the first pass (`app.log`). If CUDA is not in
+  use it says so and caps onnxruntime at 2 threads: the default grabs every core for
+  ~80 ms per pass, which is enough to stall a video playing next to it.
 - Exact text decides validity: a one-character change ("100 HP" -> "10 HP") hides the
   block at once, and a translation can only paint over the text it was requested for.
   A block that is no longer in the snapshot disappears; the 0.4-1.0 s TTL keep exists so

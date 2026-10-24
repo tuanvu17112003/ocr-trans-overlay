@@ -18,7 +18,7 @@ from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
 from .geometry import Box, Rect, union_all
 from .ocr import group_blocks, merge_boxes, plan_tiles
-from .scan import EMPTY_BACKOFF_S, MIN_INTERVAL_S, WAKE_SAMPLE_S, ScanBudget, frame_changed
+from .scan import EMPTY_BACKOFF_S, MIN_INTERVAL_S, STEADY_INTERVAL_S, WAKE_SAMPLE_S, ScanBudget, frame_changed
 from .stats import LatencyStats
 from .translate import Engine, TranslationService
 
@@ -182,6 +182,8 @@ class Pipeline:
         self._tiled = 0
         self._last_tiled_at = -1e9
         self._prev_tiled = False
+        self._last_snapshot: tuple = ()
+        self._same_text_passes = 0
         self._scan_times: deque[float] = deque()
 
         self._ocr_passes = 0
@@ -238,6 +240,8 @@ class Pipeline:
         self._last_ocr_end = self.clock() - 10.0
         self._prev_tiled = False
         self._last_tiled_at = -1e9
+        self._last_snapshot = ()
+        self._same_text_passes = 0
 
     def set_regions(self, rects: list[Rect]) -> None:
         self._regions = list(rects)
@@ -319,6 +323,16 @@ class Pipeline:
         return union_all(self._regions) if self._regions else Rect(0, 0, 1920, 1080)
 
     def _capture_loop(self) -> None:
+        try:
+            self._capture_passes()
+        finally:
+            # DXGI sessions are thread-affine: drop them on the thread that made
+            # them, never from the GC on another thread (that panics).
+            close = getattr(self.capture, "close", None)
+            if close is not None:
+                close()
+
+    def _capture_passes(self) -> None:
         while self._running:
             if not self.enabled:
                 time.sleep(0.05)
@@ -366,6 +380,11 @@ class Pipeline:
             interval = self.budget.interval(
                 self._last_ocr_ms, self._empty_count, self._wake
             )
+            if self._same_text_passes >= 2:
+                # The text on screen did not change: scan at half rate. This is
+                # the only repeating load, and video pixels always "wake", so
+                # without it a static caption costs 4 passes/s for minutes.
+                interval = max(interval, STEADY_INTERVAL_S)
             self._interval = interval
             if self.clock() - self._last_ocr_end < interval:
                 continue
@@ -407,6 +426,12 @@ class Pipeline:
                 self._scan_times.popleft()
             self._last_blocks = len(blocks)
             self._empty_count = 0 if blocks else self._empty_count + 1
+            snapshot = tuple(block.text for block in blocks)
+            if snapshot == self._last_snapshot:
+                self._same_text_passes += 1
+            else:
+                self._same_text_passes = 0
+                self._last_snapshot = snapshot
             self.emit(
                 PipelineEvent(
                     kind=EventKind.OCR_RESULT,
@@ -455,6 +480,11 @@ class Pipeline:
 
     def _tile_allowed(self) -> bool:
         region = self._region()
+        # A wide, short strip gains nothing from tiles (20 px text survives the
+        # 1280 cap) and a miss would triple the pass at the worst moment.
+        # Tiles are for large 2-D regions only.
+        if min(region.w, region.h) < 200:
+            return False
         if max(region.w, region.h) <= 1600:
             return False
         if self._prev_tiled:

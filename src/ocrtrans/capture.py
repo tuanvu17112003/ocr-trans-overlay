@@ -92,9 +92,11 @@ class DxgiBackend:
         self.full_dark = False
 
     def close(self) -> None:
-        # Native DXGI sessions cannot be dropped off their creating thread;
-        # the process is exiting, so let the OS reclaim it.
+        # Must run on the thread that created the session (the capture thread):
+        # pyo3 panics if the native session is dropped on any other thread.
+        session, self._session = self._session, None
         self._closed = True
+        del session
 
 
 class WgcBackend:

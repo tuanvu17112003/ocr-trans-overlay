@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import math
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -11,6 +12,8 @@ import numpy as np
 import cv2
 
 from .geometry import Box, Rect, iou, union_all
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -90,6 +93,7 @@ class RapidOcrEngine:
         self.use_cuda = use_cuda
         self.downscale_width = downscale_width
         self._engine = None
+        self._logged_device = False
 
     def load(self) -> None:
         _prepare_cuda_dlls()
@@ -105,8 +109,12 @@ class RapidOcrEngine:
     def _params(use_cuda: bool) -> dict:
         # HUD text is sparse and often faint, so thresholds sit below PaddleOCR's
         # defaults; capping the long side keeps a full-screen region fast enough.
+        # The CPU fallback is capped at 2 threads: the default (-1) grabs every
+        # core for ~80 ms per pass and stalls whatever else is running (video).
         return {
             "EngineConfig.onnxruntime.use_cuda": use_cuda,
+            "EngineConfig.onnxruntime.intra_op_num_threads": 2,
+            "EngineConfig.onnxruntime.inter_op_num_threads": 1,
             "Det.limit_type": "max",
             "Det.limit_side_len": 1280,
             "Det.box_thresh": 0.3,
@@ -131,6 +139,17 @@ class RapidOcrEngine:
                 interpolation=cv2.INTER_AREA,
             )
         out = self._engine(img, use_det=True, use_cls=False, use_rec=True)
+        if not self._logged_device:
+            self._logged_device = True
+            try:
+                providers = self._engine.text_det.session.session.get_providers()
+                log.info("OCR execution providers: %s", providers)
+                if providers and providers[0] != "CUDAExecutionProvider":
+                    log.warning(
+                        "OCR is running on CPU (2 threads); CUDA provider unavailable"
+                    )
+            except Exception:  # noqa: BLE001 - diagnostics only
+                pass
         return self._to_boxes(out, scale)
 
     @staticmethod

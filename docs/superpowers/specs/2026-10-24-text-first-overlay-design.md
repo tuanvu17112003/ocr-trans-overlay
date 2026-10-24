@@ -130,8 +130,13 @@ tonemaps **only the region** (~1.3 ms). During the empty backoff it keeps a
 uses a 1/64 sample of the **full frame**: an empty or dark subtitle strip is
 normal and must not be mistaken for a black screen (which used to trip the WGC
 fallback needlessly). The WGC callback crops each arriving frame before copying.
+When the text set stays identical for two passes the loop scans at 2 passes/s
+instead of 4 (`STEADY_INTERVAL_S`), because video pixels always "wake" and a
+static caption would otherwise cost four passes/s for its whole lifetime.
 Measured on the same machine: idle capture CPU ~100% -> ~20% of one core at 3.4
-grabs/s, OCR strip pass ~15-40 ms, EnViT5 batch of 3 ~193 ms / 614 MB VRAM.
+grabs/s, OCR strip pass 25 ms on the CUDA provider (80 ms on a 2-thread CPU
+fallback), EnViT5 batch of 3 ~193 ms / 614 MB VRAM. The OCR provider is logged
+once as `OCR execution providers: [...]` so a silent CPU fallback is visible.
 
 - **At most one OCR pass in flight.** The capture thread does not grab while a
   frame is pending, so the pending frame is never replaced. This makes latency
@@ -173,6 +178,13 @@ of 1280 px, 64 px overlap, boxes mapped back, duplicates merged by IoU >= 0.5
 keeping the higher confidence). At most one tiled pass every 2 s, and never
 two tiled passes in a row. Rationale: dense text is read by the fast pass; the
 tiled pass only rescues sparse small text, and its cost is capped.
+
+As built (2026-10-24, after the video-stutter report): tiles are also skipped
+when the region is shorter than 200 px. Measured on a 1760x53 strip with 20-32 px
+captions, one capped pass and two native tiles found the text 5/5 times at the
+same cost (75 ms), so the rescue bought no recall; on a miss it just ran two
+extra OCR passes at the moment the user saw a hitch. A wide, short subtitle
+strip is now always one pass.
 
 ### 4.4 BlockMemory
 
