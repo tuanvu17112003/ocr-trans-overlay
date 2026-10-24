@@ -119,6 +119,20 @@ def test_centred_wrapped_caption_is_one_block():
     assert "lost ourselves" in blocks[0].text
 
 
+def test_a_speaker_name_is_not_merged_into_the_dialogue():
+    # The name is rendered larger than the dialogue; the gap is small enough
+    # to pass the paragraph rule, so the font size must decide.
+    boxes = [
+        Box(Rect(560, 40, 500, 44), "Beleaguered Celestial", 0.95),
+        Box(Rect(490, 104, 640, 30), "Oh, what am I supposed to do now...", 0.95),
+    ]
+    blocks = group_blocks(boxes)
+    assert [b.text for b in blocks] == [
+        "Beleaguered Celestial",
+        "Oh, what am I supposed to do now...",
+    ]
+
+
 def test_plan_tiles_covers_a_2560x1440_region_in_at_most_four_tiles():
     tiles = plan_tiles(2560, 1440)
     assert 1 < len(tiles) <= 4
