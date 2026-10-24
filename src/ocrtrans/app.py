@@ -15,7 +15,13 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from .blocks import BlockMemory
-from .capture import CaptureManager, DxgiBackend, WgcBackend
+from .capture import (
+    CaptureManager,
+    DxgiBackend,
+    WgcBackend,
+    enumerate_monitors,
+    primary_monitor_index,
+)
 from .config import Config, load_config, save_config
 from .exclusion import AffinityGate
 from .geometry import Rect
@@ -111,13 +117,29 @@ def main() -> int:
     overlay.hide()
     outline = RegionOutline(screen)
 
+    monitors = enumerate_monitors()
+    monitor_index = primary_monitor_index(monitors)
+    monitor_rect = next((rect for rect, primary in monitors if primary), None)
+    log.info(
+        "capture monitor %s %s (of %s)",
+        monitor_index,
+        monitor_rect,
+        [rect for rect, _primary in monitors],
+    )
+
     if os.environ.get("OCRTRANS_DXGI"):
-        capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
+        capture = CaptureManager(
+            DxgiBackend(),
+            WgcBackend(monitor_index=monitor_index, monitor_rect=monitor_rect),
+        )
     else:
         # WGC first: an active Desktop Duplication session keeps the output out
         # of the video's independent-flip path and measurably drops frames
         # (5-8 per 15 s at 1440p60 in Edge; WGC dropped 0 in the same runs).
-        capture = CaptureManager(WgcBackend(monitor_index=1), DxgiBackend())
+        capture = CaptureManager(
+            WgcBackend(monitor_index=monitor_index, monitor_rect=monitor_rect),
+            DxgiBackend(),
+        )
     log.info(
         "capture %s (backup %s); overlay %s; debug %s; region %s",
         type(capture.main).__name__,
@@ -158,6 +180,7 @@ def main() -> int:
             **pipeline.stats(),
             "engine": state["engine_name"] or cfg.engine,
             "health": capture.health.name,
+            "monitor_mismatch": getattr(capture.main, "monitor_mismatch", False),
             "error": state["error"],
             "rendered": overlay.shown,
             "hidden_stale": overlay.state.hidden_stale,
