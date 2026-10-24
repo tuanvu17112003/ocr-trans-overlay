@@ -64,6 +64,7 @@ Non-goals:
 Anti-goals (a result that is still a failure even if it runs):
 
 - Showing the previous translation over new source text, ever.
+- Treating a similar-but-different source as the same text ("100 HP" vs "10 HP").
 - A block that stays painted after its text is gone.
 - OCR work that grows with the number of tracked blocks or with background
   motion.
@@ -107,17 +108,22 @@ and because its cost is measurable and testable (passes per second, OCR ms).
 
 ```
 loop:
-  wait until budget allows a pass            # scan_interval
-  frame, health = capture.grab(region)
-  if frame is None: emit health, sleep, continue
-  frame = maybe_downscale_for_wake_check(frame)   # 320 px gray, wake only
-  wake = changed_pixels_ratio(frame) > 0.01       # optional, see 4.5
-  if health != OK: emit CAPTURE_HEALTH            # do NOT reset, do NOT skip
-  emit SCAN_START(frame, health) -> ocr queue (depth 1, newest wins)
+  if pending OCR frame: sleep 16ms; continue    # never replace a frame
+  frame, health = capture.grab(region)          # at fps while idle
+  if frame is None: emit health, sleep to next tick; continue
+  wake = changed_pixels_ratio(320px gray) > 0.01
+  if now < next_scan_at and not (wake and backed_off): sleep to next tick; continue
+  scan_id += 1
+  emit SCAN_START(frame, health, scan_id) -> ocr queue (depth 1)
+  # the OCR thread sets next_scan_at = ocr_end + interval when the pass ends
 ```
 
-- Capture runs at `fps` (settings, default 15) only to keep a fresh frame and
-  drive the cheap wake check; a pass is queued when the budget permits.
+- **At most one OCR pass in flight.** The capture thread does not grab while a
+  frame is pending, so the pending frame is never replaced. This makes latency
+  predictable: `latency <= interval + ocr_ms + mt_ms`.
+- `next_scan_at` is computed from the **end** of the previous pass:
+  `next_scan_at = ocr_end + interval`. While a pass runs, the capture thread
+  only runs the cheap wake check.
 - `health != OK` no longer skips the frame. The frame is used, the health is
   reported to the overlay (which holds the last cover for 1 s, then hides).
 - No `tracker.reset()` on fallback. A reset happens only on region change,
@@ -131,15 +137,15 @@ One pass = one full-region detection + recognition, plus grouping:
 2. `groups = group_blocks(boxes)`; one Box per paragraph, `line_px` from the
    median line height.
 3. `blocks = memory.observe(groups, now)` — identity + stability (4.4).
-4. Emit `OCR_RESULT` with a **complete snapshot**: the blocks matched in this
-   pass plus any block still inside its `ttl` (a missed pass keeps it for one
-   more pass). `blocks=[...]`, `complete=True`. There is no
-   `observed_block_ids` list to misinterpret; a block missing from the snapshot
-   has expired, and the overlay hides it.
-5. Submit stable, changed texts to MT (unchanged selection: stable, >= 3 chars,
-   not already submitted for this epoch, max 12 per pass ordered by area).
-
-Pass duration is recorded; `ScanBudget` uses it to stretch the interval.
+4. Emit `OCR_RESULT` with a **complete snapshot** and a monotonic `scan_id`:
+   the blocks matched in this pass plus any block still inside its `ttl` (a
+   missed pass keeps it for one more pass). `blocks=[...]`, `scan_id=n`,
+   `complete=True`. There is no `observed_block_ids` list to misinterpret; a
+   block missing from the snapshot has expired, and the overlay hides it.
+5. Submit stable, changed texts to MT. Each item carries the exact source text
+   and the `scan_id` that produced it. Selection: STABLE, >= 3 chars, exact
+   text not already translated/in flight for this epoch, max 12 per pass by area.
+6. Record `ocr_end = clock()`; the budget uses the measured duration.
 
 Tiling rule (bounded): if the region's long side is > 1600 px, the scan runs on
 one capped frame (det long side 1280, as today). If a pass returns **zero**
@@ -151,81 +157,96 @@ tiled pass only rescues sparse small text, and its cost is capped.
 
 ### 4.4 BlockMemory
 
-Same `TrackBlock` shape minus pixel fields; matching keeps `_match_score`
-(IoU with containment floor). The stability window becomes **time-based**
-(`stable_after_s`: fast 150 ms, safe 300 ms), because the pass rate is no longer
-15/s; "3 passes" would mean ~1 s at the new cadence. `stability_profile` keeps
-its name in the config and control window, but maps to seconds.
+Block identity uses the rect score only (`_match_score`: IoU with a containment
+floor). Text is compared **exactly** after normalisation; there is no similarity
+threshold anywhere in the validity path.
+
+Rationale: "You have 100 HP" and "You have 10 HP" are ~95% similar and mean
+different things. A fuzzy rule that keeps the old translation would paint
+"100 HP" over "10 HP". Fuzzy matching may only decide *which block is this*,
+never *whether a translation is still valid*.
 
 ```python
 @dataclass
 class TrackBlock:
     id: int
     rect: Rect
-    text: str                # last text that was accepted
+    text: str                # exact normalised text of the last accepted read
     state: BlockState        # PENDING | STABLE
-    first_seen: float        # start of the current text
+    first_seen: float        # when this exact text first appeared
     last_seen: float         # monotonic, set on every match
     line_px: int
 
 class BlockMemory:
     def observe(self, boxes: list[Box], now: float) -> list[TrackBlock]:
         # match each box to the best block by rect score, else new id
-        # same text (norm equal) or similarity >= 0.9: keep text, last_seen = now
-        # different text: replace text, first_seen = now, state = PENDING
-        # PENDING -> STABLE after stable_after_s of the same text
+        # text equal: keep it, stable after stable_after_s, last_seen = now
+        # text different by any character (digits included):
+        #     text = new, first_seen = now, state = PENDING
         # return matched blocks + blocks still inside ttl
 ```
 
-Text similarity: after normalisation, `difflib.SequenceMatcher.ratio() >= 0.9`
-is the same text (a one-character OCR wobble). Only a different text resets
-stability and re-submits MT.
-
-Snapshot contract: the returned list is matched blocks **plus** blocks whose
-`last_seen` is within `ttl = max(2 * scan_interval, 400 ms)`. A block absent
-from that list is expired, and the overlay removes it. One false-negative pass
-at 3 passes/s therefore keeps the cover for ~0.6 s instead of strobing it.
+- Stability is time-based and exact: `stable_after_s` (fast 150 ms, safe
+  300 ms). A wobbling OCR read never becomes STABLE, so no MT is submitted and
+  nothing is painted until the read settles. That is the cost of not guessing:
+  the English source stays visible instead of showing a wrong translation.
+- `stability_profile` keeps its name in the config and control window but maps
+  to seconds.
+- Snapshot contract: matched blocks **plus** blocks whose `last_seen` is within
+  `ttl = max(2 * interval, 400 ms)`. A block absent from that list is expired
+  and the overlay removes it. One false-negative pass at ~3 passes/s keeps the
+  cover ~0.6 s instead of strobing it.
 
 ### 4.5 ScanBudget
 
 ```python
-interval = max(1.0 / fps, 0.25, 2.0 * last_ocr_ms / 1000)
-if consecutive_empty >= 3: interval = max(interval, 1.0)
-if wake and consecutive_empty:                 # cheap 320px gray diff
-    interval = min(interval, 0.25)             # text may have appeared
+base = max(1.0 / fps, 0.25, 1.5 * last_ocr_ms / 1000)
+if consecutive_empty >= 3:
+    base = max(base, 1.0)          # empty-screen backoff
+interval = base                    # a wake only cancels the empty backoff
 ```
 
-- 171 ms OCR on a synthetic 2560 scene -> ~3.3 passes/s.
-- An empty screen settles at 1 pass/s (wake check still runs at fps).
-- `wake` uses absolute pixel change only as a **wake signal**; it never selects
-  crops, never resets blocks, never forces a full detect.
-- The wake check is optional in v1: if it adds complexity, start with the fixed
-  interval of 1 s on empty output (decision left to the builder, default: keep
-  it, it is 10 lines on a 320 px gray frame).
+- Origin is the **end** of the previous pass: `next_scan_at = ocr_end + interval`.
+- The floor is `1.5 * last_ocr_ms`: an 852 ms pass means a >= 1.28 s interval
+  even when a wake fires. A wake can remove the extra 1 s empty-screen backoff,
+  never race the OCR worker.
+- At most one pass is in flight (4.2), so the interval never overlaps OCR and
+  the capture thread never replaces a pending frame.
+- 171 ms measured -> ~3.3 passes/s; 852 ms -> ~0.8 passes/s, the honest
+  throughput of that machine.
+- Wake is a signal only: no crops, no reset, no forced detect.
 
 ### 4.6 Overlay state machine
 
-`OverlayState` keeps `{block_id: _Block(rect, source, translated, line_px,
-last_seen)}` and is fed by complete snapshots.
+`OverlayState` keeps
+`{block_id: _Block(rect, source, translated_for, translated, line_px)}` plus
+`last_scan_id` and `suppressed_at_scan`, and is fed by snapshots ordered by
+`scan_id`.
 
 | event | action |
 |---|---|
-| `RESET` | clear everything, return `[]` |
-| `OCR_RESULT` (complete) | for each view: create/update. If the normalised source is the same or >= 0.9 similar, keep `translated` (a wobble must not clear the cover) and update rect/line_px/last_seen. If it is a different text, set `translated=""` and `suppressed=False` immediately. For every stored id **not** in the snapshot: remove it. Return render items. |
-| `TRANSLATION_RESULT` | apply only if `normalise(item.source) == normalise(stored.source)`; otherwise drop |
-| `CAPTURE_HEALTH` | `WGC_FALLBACK` is a working frame: ignore it. `RECREATING`, `BLACK`, `BLOCKED`: keep painting for up to 1 s, then set `suppressed=True`. Itsend of hold (health OK or the next OCR snapshot) clears `suppressed`. |
-| no OCR event for >= 1.5 s | `suppressed=True` (watchdog on the drain timer) |
-| `SKIP` | nothing (the event is removed in the new pipeline) |
+| `RESET` | clear everything, `suppressed=False`, return `[]` |
+| `OCR_RESULT` | ignore when `event.scan_id <= last_scan_id` (stale completion). Otherwise, per view: create/update. If the normalised source differs from the stored source by **any** character, set `translated=""`, `translated_for=""`. Apply rect/line_px/last_seen. Remove stored ids absent from the snapshot. Then `last_scan_id = event.scan_id`, and if `suppressed` and `scan_id > suppressed_at_scan`, set `suppressed=False`. |
+| `TRANSLATION_RESULT` | apply only when `normalise(item.source) == stored.source` exactly; set `translated`, `translated_for = item.source` |
+| `CAPTURE_HEALTH` | `WGC_FALLBACK` is a working frame: ignore. `RECREATING`, `BLACK`, `BLOCKED`: keep painting up to 1 s, then `suppressed=True`, `suppressed_at_scan = last_scan_id`. Health OK does **not** unsuppress. |
+| no OCR event >= 1.5 s | `suppressed=True`, `suppressed_at_scan = last_scan_id` (watchdog on the drain timer) |
+| `SKIP` | removed from the event set |
 
-`suppressed` is a render gate, not a data wipe: `translated` and `source` stay in
-memory, so the same text repaints as soon as a snapshot or healthy frame
-returns, and the MT dedupe (`pipeline._last_mt`) does not need to be reset.
-Only snapshot absence removes a block for good.
+- Suppression is a render gate, not a data wipe: `translated` stays in memory,
+  so the same text repaints without a new MT request. But it is only lifted by
+  a **snapshot with `scan_id > suppressed_at_scan`**, never by health alone.
+  After a 2 s gap where the subtitle changed A -> B, the returning snapshot
+  carries B; A cannot repaint because B's exact text cleared A's translation
+  before suppression was lifted.
+- Paint condition: `translated` non-empty, `translated_for == source` (exact,
+  normalised) and not suppressed.
+- A one-character OCR wobble clears that block's cover (English visible) until
+  a stable read and its translation arrive. Accepted trade: never show 100 HP
+  when the screen says 10 HP.
 
-Rendering: a block paints only when `translated` is non-empty and not
-suppressed; cover = block rect, text fitted inside. A block whose source
-changed paints nothing until the new translation arrives. That is the explicit
-trade chosen: a short gap instead of a wrong overlay.
+Ordering invariant: one OCR worker and a monotonic `scan_id` per epoch. A pass
+that finishes late can never roll state back (dropped by `scan_id`), and an MT
+result can only satisfy the exact text it was requested for.
 
 ### 4.7 Status and instrumentation
 
@@ -247,7 +268,9 @@ Status line: `OCR 190 pass (3.1/s) · text 2 · shown 2 · err 0/0 · p50 171 ms
 - Translation error: service counter + fallback engine (already implemented).
 - Capture `None`: report health, keep the last overlay up to 1 s.
 - Capture fallback: recognition continues; health is only informational.
-- No frames for 1.5 s: the overlay watchdog clears the screen.
+- No frames for 1.5 s: the overlay suppresses painting (a gate, not a wipe).
+- Suppression ends on the next applied snapshot (`scan_id > suppressed_at_scan`),
+  never on health alone.
 - Region change / engine change / pause: RESET (unchanged).
 
 ## 6. Tests
@@ -258,17 +281,30 @@ Unit:
   to fail before the rewrite. Runs past the TTL (fake clock), then asserts the
   removed block produced no render item.
 - `test_overlay_keeps_the_cover_through_one_missed_pass` — the strobe guard.
-- `test_overlay_clears_translation_when_source_changes` and
-  `test_overlay_keeps_translation_for_a_near_identical_source` (>= 0.9).
+- `test_overlay_clears_translation_when_source_changes`.
+- `test_digit_change_never_keeps_the_old_translation` — "You have 100 HP" ->
+  "You have 10 HP" must drop the translation in the same snapshot (the fuzzy
+  rule is gone; this is the regression test for that review finding).
 - `test_overlay_drops_translation_for_old_source`.
+- `test_stale_snapshot_is_ignored` — applying a snapshot with
+  `scan_id <= last_scan_id` changes nothing.
 - `test_overlay_fallback_capture_keeps_painting` (WGC_FALLBACK is not a hold)
   and `test_overlay_black_capture_hides_after_one_second`.
 - `test_overlay_watchdog_suppresses_without_wiping` — the same source returns
   and paints without a new translation request.
+- `test_watchdog_does_not_repaint_before_a_fresh_snapshot` — suppress, change
+  the text, health OK, then assert nothing paints until the snapshot with the
+  new `scan_id` arrives (the stale-A-after-gap case).
 - `test_block_memory_keeps_identity_across_passes` and drops after TTL.
+- `test_block_memory_requires_exact_text_for_stability` — a one-character
+  wobble never becomes STABLE and never reuses the old translation.
 - `test_block_memory_stability_uses_time_not_passes` (150/300 ms profiles).
 - `test_scan_budget_never_exceeds_budget` (fake clock, measured 300 ms pass ->
   interval >= 600 ms) and empty-output backoff.
+- `test_budget_never_below_measured_ocr_time` — an 852 ms pass plus a wake
+  still yields an interval >= 1.28 s.
+- `test_pending_frame_is_not_replaced` — the capture thread does not grab while
+  an OCR pass is in flight.
 - Pipeline: a moving background must not add passes; a static frame with text
   must keep the same block id and text; a changed text must produce a snapshot
   without the old text.
@@ -338,30 +374,38 @@ low-VRAM machine, and it reuses `_OnlineBase`-like HTTP or a thin local class.
   tiling is bounded, not free.
 - Selecting a huge region raises OCR cost: 171 ms at 1280 capped, ~2x when
   tiled. The region picker guidance matters.
-- A block that keeps the same rect but changes text between passes may be
-  matched as "same block" with a fuzzy text; the similarity >= 0.9 rule already
-  treats near-identical text as stable, and the exact-text equality check before
-  painting prevents showing a translation for different text.
+- OCR wobble on a moving background can clear a cover and re-request MT (exact
+  text, no fuzzy reuse). Cost is bounded by the cache and the 12-items-per-pass
+  cap; the alternative (fuzzy reuse) risks showing the wrong number or word.
+- A 0.6 s TTL means a subtitle that disappears can stay covered for one pass.
+  Chosen over strobing on every false-negative pass.
 
 ## 10. Decisions I made (check these while reading)
 
-1. Hide, never show stale: a real source change hides the block immediately,
-   even if this makes a 200-800 ms gap until the new translation. A <= 10%
-   character difference counts as the same text and keeps the cover (OCR
-   wobble must not strobe).
-2. Blocks leave the snapshot only after `ttl` (`max(2 * interval, 400 ms)`), so
+1. **Exact text decides validity.** Any character change (digits included)
+   hides the block immediately. No similarity threshold exists in the paint
+   path; "100 HP" -> "10 HP" always hides. Similarity is not used for block
+   identity either (rect score is).
+2. Hide, never show stale: a source change hides the block at once, even at the
+   cost of a 200-800 ms gap until the new translation.
+3. Blocks leave the snapshot only after `ttl` (`max(2 * interval, 400 ms)`), so
    one false-negative pass at ~3 passes/s keeps the cover ~0.6 s.
-3. `WGC_FALLBACK` is a working frame and does not hide anything; only
+4. `WGC_FALLBACK` is a working frame and does not hide anything; only
    `RECREATING`/`BLACK`/`BLOCKED` engage the 1 s hold, and that hold suppresses
    painting without wiping the translation.
-4. Empty-screen backoff is driven by scan results, with a cheap pixel wake
+5. Suppression is lifted only by a snapshot with `scan_id > suppressed_at_scan`,
+   never by health alone: a stale cover cannot return after a capture gap.
+6. One OCR pass in flight; `next_scan_at = ocr_end + max(1/fps, 250 ms,
+   1.5*ocr_ms)`; a wake only cancels the empty-screen backoff and never goes
+   below the measured-OCR floor.
+7. Empty-screen backoff is driven by scan results, with a cheap pixel wake
    signal (not a scheduler).
-5. Tiling only as a bounded rescue for large regions, never the default.
-6. `stability_profile` stays user-facing but becomes a time window (fast 150 ms,
+8. Tiling only as a bounded rescue for large regions, never the default.
+9. `stability_profile` stays user-facing but becomes a time window (fast 150 ms,
    safe 300 ms), not a pass count, so it survives a change of scan cadence.
-7. Argos is added as an optional engine now; LibreTranslate documented as an
-   endpoint, not shipped as a server. Both must be removable without breaking
-   the app.
-8. A snapshot that arrives while the overlay is suppressed repaints the same
-   text without a new translation request; `pipeline._last_mt` is never cleared
-   by suppression.
+10. Argos is added as an optional engine now; LibreTranslate documented as an
+    endpoint, not shipped as a server. Both must be removable without breaking
+    the app.
+11. A snapshot that arrives while the overlay is suppressed repaints the same
+    text without a new translation request; `pipeline._last_mt` is never cleared
+    by suppression.
