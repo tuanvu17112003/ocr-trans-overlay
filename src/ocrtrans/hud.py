@@ -7,7 +7,7 @@ from typing import Callable
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QLabel, QWidget
 
-from .overlay import _exclude_from_capture
+from .exclusion import exclude_from_capture
 
 
 class HudWindow(QWidget):
@@ -42,7 +42,7 @@ class HudWindow(QWidget):
     def set_visible(self, visible: bool) -> None:
         if visible:
             self.show()
-            _exclude_from_capture(int(self.winId()))
+            exclude_from_capture(int(self.winId()))
             self.raise_()
         else:
             self.hide()

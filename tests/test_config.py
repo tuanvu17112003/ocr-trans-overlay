@@ -1,6 +1,6 @@
 import pytest
 
-from ocrtrans.config import load_config, save_config
+from ocrtrans.config import Config, load_config, save_config
 
 
 def test_defaults_roundtrip(tmp_path):
@@ -17,6 +17,23 @@ def test_unknown_engine_rejected(tmp_path):
     p.write_text('{"engine": "bogus"}', encoding="utf-8")
     with pytest.raises(ValueError):
         load_config(p)
+
+
+def test_old_monitor_config_loads_as_single(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(
+        '{"region_mode": "monitor", "regions": [{"monitor_id": "0", "x": 0.0, "y": 0.1, "w": 0.5, "h": 0.1}]}',
+        encoding="utf-8",
+    )
+    cfg = load_config(path)
+    assert cfg.region_mode == "single"
+    assert len(cfg.regions) == 1
+
+
+def test_monitor_mode_is_no_longer_writable(tmp_path):
+    cfg = Config(region_mode="monitor")
+    with pytest.raises(ValueError):
+        save_config(cfg, tmp_path / "config.json")
 
 
 def test_argos_is_a_valid_engine():

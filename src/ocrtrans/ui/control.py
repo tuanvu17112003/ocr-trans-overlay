@@ -1,16 +1,22 @@
-﻿"""Main control window: every user-facing setting, Start/Stop and status."""
+"""Main control window: every user-facing setting, Start/Stop and status."""
 
 from __future__ import annotations
 
 from typing import Callable
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
+    QFontComboBox,
     QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -18,6 +24,9 @@ from PyQt6.QtWidgets import (
 )
 
 from ..config import ENGINES, Config
+from ..geometry import Rect
+from ..regions import NormalizedRegion, to_physical
+from . import theme
 
 ONLINE_ENGINES = {"google", "gemini", "deepl", "mymemory"}
 
@@ -28,23 +37,30 @@ class ControlWindow(QWidget):
         config: Config,
         on_start: Callable[[], None],
         on_stop: Callable[[], None],
-        on_pick_region: Callable[[], None],
+        on_add_region: Callable[[], None],
+        on_adjust_region: Callable[[int], None],
+        on_delete_region: Callable[[int], None],
         on_apply: Callable[[Config], None],
         status_provider: Callable[[], dict],
+        monitor: Rect,
         on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.on_start = on_start
         self.on_stop = on_stop
-        self.on_pick_region = on_pick_region
+        self.on_add_region = on_add_region
+        self.on_adjust_region = on_adjust_region
+        self.on_delete_region = on_delete_region
         self.on_apply = on_apply
         self.status_provider = status_provider
         self.on_close = on_close
+        self.monitor = monitor
         self.running = False
 
         self.setWindowTitle("OCRTrans - screen translation")
-        self.resize(440, 0)
+        self.setObjectName("ControlWindow")
+        self.resize(520, 0)
 
         self.engine = QComboBox()
         self.engine.addItems(sorted(ENGINES))
@@ -61,36 +77,111 @@ class ControlWindow(QWidget):
         self.fps.setRange(5, 30)
         self.fps.setValue(config.capture_fps)
         self.mode = QComboBox()
-        self.mode.addItems(["single", "multi", "monitor"])
+        self.mode.addItems(["single", "multi"])
         self.mode.setCurrentText(config.region_mode)
         self.min_font = QSpinBox()
         self.min_font.setRange(8, 32)
         self.min_font.setValue(config.min_font_px)
 
-        self.region_button = QPushButton("Pick region")
-        self.region_button.clicked.connect(self.on_pick_region)
-        self.region_label = QLabel("1 region")
+        self.region_list = QListWidget()
+        self.add_button = QPushButton("Add region")
+        self.adjust_button = QPushButton("Adjust")
+        self.delete_button = QPushButton("Delete")
+        self.delete_button.setObjectName("danger")
+        self.add_button.clicked.connect(lambda: self.on_add_region())
+        self.adjust_button.clicked.connect(self._adjust_region)
+        self.delete_button.clicked.connect(self._delete_region)
+        self.region_list.currentRowChanged.connect(lambda _row: self._refresh_region_buttons())
+        self.mode.currentTextChanged.connect(lambda _mode: self.refresh_regions())
+        self.show_outlines = QCheckBox("Show outlines while running")
+
+        self._text_color = config.text_color
+        self._bg_color = config.bg_color
+        self.text_color_button = QPushButton()
+        self.bg_color_button = QPushButton()
+        self.text_color_button.clicked.connect(self._pick_text_color)
+        self.bg_color_button.clicked.connect(self._pick_bg_color)
+        self.font_combo = QFontComboBox()
+        self.font_combo.setCurrentFont(QFont(config.font_family))
+        self.preview = QLabel("Đây là bản dịch mẫu")
+        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setMinimumHeight(56)
+
+        self.chip = QLabel("? stopped")
+        self.chip.setObjectName("muted")
         self.start_button = QPushButton("Start")
+        self.start_button.setObjectName("primary")
+        self.start_button.setMinimumHeight(36)
         self.start_button.clicked.connect(self._toggle)
         self.status_label = QLabel("stopped")
+        self.status_label.setObjectName("muted")
         self.status_label.setWordWrap(True)
 
-        form = QFormLayout()
-        form.addRow("Engine", self.engine)
-        form.addRow("Gemini key", self.gemini_key)
-        form.addRow("DeepL key", self.deepl_key)
-        form.addRow("", self.consent)
-        form.addRow("Stability", self.profile)
-        form.addRow("FPS", self.fps)
-        form.addRow("Region mode", self.mode)
-        form.addRow("", self.region_button)
-        form.addRow("", self.region_label)
-        form.addRow("Min font px", self.min_font)
-        form.addRow("", self.start_button)
-        form.addRow("Status", self.status_label)
+        title = QLabel("OCRTrans")
+        title.setObjectName("title")
+        header = QHBoxLayout()
+        header.addWidget(title)
+        header.addStretch()
+        header.addWidget(self.chip)
+
+        regions_box = QGroupBox("REGIONS")
+        regions_layout = QVBoxLayout(regions_box)
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Mode"))
+        mode_row.addWidget(self.mode)
+        mode_row.addStretch()
+        mode_row.addWidget(self.show_outlines)
+        regions_layout.addLayout(mode_row)
+        self.region_hint = QLabel("No region yet — Add one")
+        self.region_hint.setObjectName("muted")
+        regions_layout.addWidget(self.region_hint)
+        regions_layout.addWidget(self.region_list)
+        button_row = QHBoxLayout()
+        button_row.addWidget(self.add_button)
+        button_row.addWidget(self.adjust_button)
+        button_row.addWidget(self.delete_button)
+        regions_layout.addLayout(button_row)
+
+        overlay_box = QGroupBox("OVERLAY")
+        overlay_layout = QVBoxLayout(overlay_box)
+        color_row = QHBoxLayout()
+        color_row.addWidget(QLabel("Text"))
+        color_row.addWidget(self.text_color_button)
+        color_row.addWidget(QLabel("Background"))
+        color_row.addWidget(self.bg_color_button)
+        color_row.addStretch()
+        overlay_layout.addLayout(color_row)
+        font_row = QHBoxLayout()
+        font_row.addWidget(QLabel("Font"))
+        font_row.addWidget(self.font_combo, 1)
+        font_row.addWidget(QLabel("Min px"))
+        font_row.addWidget(self.min_font)
+        overlay_layout.addLayout(font_row)
+        overlay_layout.addWidget(self.preview)
+
+        engine_box = QGroupBox("ENGINE")
+        engine_form = QFormLayout(engine_box)
+        engine_form.addRow("Engine", self.engine)
+        engine_form.addRow("Gemini key", self.gemini_key)
+        engine_form.addRow("DeepL key", self.deepl_key)
+        engine_form.addRow("", self.consent)
+        engine_form.addRow("Stability", self.profile)
+        engine_form.addRow("FPS", self.fps)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.addLayout(header)
+        layout.addWidget(regions_box)
+        layout.addWidget(overlay_box)
+        layout.addWidget(engine_box)
+        layout.addWidget(self.start_button)
+        layout.addWidget(self.status_label)
+
+        self.set_appearance(
+            config.text_color, config.bg_color, config.font_family, config.min_font_px
+        )
+        self.min_font.valueChanged.connect(lambda _value: self._apply_appearance())
+        self.font_combo.currentFontChanged.connect(self._on_font_changed)
+        self.refresh_regions()
 
         self.engine.currentTextChanged.connect(self._sync_keys)
         self._sync_keys(self.engine.currentText())
@@ -117,9 +208,107 @@ class ControlWindow(QWidget):
     def set_running(self, running: bool) -> None:
         self.running = running
         self.start_button.setText("Stop" if running else "Start")
+        self.chip.setText("? running" if running else "? stopped")
+        self.chip.setStyleSheet(f"color: {theme.ACCENT if running else theme.MUTED}")
 
-    def set_regions(self, count: int) -> None:
-        self.region_label.setText(f"{count} region(s)")
+    def set_appearance(
+        self, text_color: str, bg_color: str, font_family: str, min_font_px: int
+    ) -> None:
+        self._text_color = text_color
+        self._bg_color = bg_color
+        self.font_combo.setCurrentFont(QFont(font_family))
+        # The combo falls back to the platform default when the font database is
+        # empty (offscreen tests), so keep the requested family as the value.
+        self._font_family = font_family
+        self.min_font.setValue(min_font_px)
+        self._sync_swatches()
+        self._paint_preview()
+
+    def _on_font_changed(self, font: QFont) -> None:
+        self._font_family = font.family()
+        self._apply_appearance()
+
+    def _apply_appearance(self) -> None:
+        self._paint_preview()
+        self.on_apply(self.read_config())
+
+    def _sync_swatches(self) -> None:
+        for button, color, label in (
+            (self.text_color_button, self._text_color, "Text"),
+            (self.bg_color_button, self._bg_color, "Background"),
+        ):
+            ink = "#08120E" if QColor(color).lightness() > 128 else theme.TEXT
+            button.setText(f"{label} {color}")
+            button.setStyleSheet(
+                f"background: {color}; color: {ink}; border: 1px solid {theme.BORDER};"
+                " border-radius: 6px; padding: 4px 8px;"
+            )
+
+    def _paint_preview(self) -> None:
+        family = self._font_family
+        px = max(12, self.min_font.value())
+        self.preview.setStyleSheet(
+            f"background: {self._bg_color}; color: {self._text_color};"
+            f" font-family: '{family}'; font-size: {px}px;"
+            f" border: 1px solid {theme.BORDER}; border-radius: 8px; padding: 10px;"
+        )
+
+    def _pick_text_color(self) -> None:
+        color = QColorDialog.getColor(QColor(self._text_color), self, "Overlay text color")
+        if color.isValid():
+            self.set_appearance(
+                color.name(),
+                self._bg_color,
+                self._font_family,
+                self.min_font.value(),
+            )
+            self.on_apply(self.read_config())
+
+    def _pick_bg_color(self) -> None:
+        color = QColorDialog.getColor(QColor(self._bg_color), self, "Overlay background color")
+        if color.isValid():
+            self.set_appearance(
+                self._text_color,
+                color.name(),
+                self._font_family,
+                self.min_font.value(),
+            )
+            self.on_apply(self.read_config())
+
+    def selected_region(self) -> int | None:
+        row = self.region_list.currentRow()
+        return row if row >= 0 else None
+
+    def refresh_regions(self) -> None:
+        current = self.selected_region()
+        self.region_list.clear()
+        self.region_hint.setVisible(not self.config.regions)
+        applied = 1 if self.mode.currentText() == "single" else len(self.config.regions)
+        for index, raw in enumerate(self.config.regions):
+            rect = to_physical(NormalizedRegion(**raw), self.monitor)
+            text = f"{index + 1}  ·  {rect.w} × {rect.h}"
+            if index >= applied:
+                text += "  (inactive)"
+            self.region_list.addItem(text)
+        if current is not None and self.region_list.count():
+            self.region_list.setCurrentRow(min(current, self.region_list.count() - 1))
+        self._refresh_region_buttons()
+
+    def _refresh_region_buttons(self) -> None:
+        selected = self.selected_region() is not None
+        self.adjust_button.setEnabled(selected)
+        self.delete_button.setEnabled(selected and len(self.config.regions) > 1)
+        self.start_button.setEnabled(bool(self.config.regions))
+
+    def _adjust_region(self) -> None:
+        index = self.selected_region()
+        if index is not None:
+            self.on_adjust_region(index)
+
+    def _delete_region(self) -> None:
+        index = self.selected_region()
+        if index is not None:
+            self.on_delete_region(index)
 
     def set_status_text(self, text: str) -> None:
         self.status_label.setText(text)
@@ -158,6 +347,9 @@ class ControlWindow(QWidget):
         cfg.capture_fps = self.fps.value()
         cfg.region_mode = self.mode.currentText()
         cfg.min_font_px = self.min_font.value()
+        cfg.text_color = self._text_color
+        cfg.bg_color = self._bg_color
+        cfg.font_family = self._font_family
         keys = dict(cfg.keys)
         if self.gemini_key.text().strip():
             keys["gemini"] = self.gemini_key.text().strip()

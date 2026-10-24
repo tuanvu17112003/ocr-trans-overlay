@@ -23,6 +23,16 @@ def make_overlay(qapp):
     return overlay
 
 
+def test_overlay_picks_up_a_font_change(qapp):
+    cfg = Config()
+    view = OverlayWindow(Rect(0, 0, 800, 200), cfg, queue.Queue())
+    view.show_items([make_item()])
+    cfg.font_family = "Consolas"
+    view.show_items([make_item()])
+    assert view.measure.family == "Consolas"
+    view.close()
+
+
 def test_cover_is_the_source_block(qapp):
     overlay = make_overlay(qapp)
     layout = overlay._layouts[0]
