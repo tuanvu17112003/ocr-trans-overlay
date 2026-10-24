@@ -112,7 +112,7 @@ loop:
   frame, health = capture.grab(region)          # at fps while idle
   if frame is None: emit health, sleep to next tick; continue
   wake = changed_pixels_ratio(320px gray) > 0.01
-  interval = budget.interval(fps, last_ocr_ms, empty_count, wake)   # single owner
+  interval = budget.interval(last_ocr_ms, empty_count, wake)   # single owner
   if now - last_ocr_end < interval: sleep to next tick; continue
   scan_id += 1
   emit SCAN_START(frame, health, scan_id) -> ocr queue (depth 1)
@@ -124,11 +124,13 @@ loop:
 - The wait is measured from the **end** of the previous pass
   (`now - last_ocr_end`), and it is recomputed every idle tick from the same
   `ScanBudget.interval` the tests call. A wake therefore shortens the wait to
-  the budget floor, never below it.
+  the budget floor, never below it. While a pass runs the capture thread sleeps;
+  the wake check resumes when the pass ends.
 - `health != OK` no longer skips the frame. The frame is used, the health is
   reported to the overlay (which holds the last cover for 1 s, then hides).
 - No `tracker.reset()` on fallback. A reset happens only on region change,
-  enable/disable, engine change, or stop.
+  enable/disable, engine change, or stop; those also clear the wake baseline
+  (`prev = None`) and `BlockMemory`.
 
 ### 4.3 OCR pass (ocr thread)
 
@@ -255,7 +257,7 @@ breaks a row fails the suite.
 `OverlayState` keeps
 `{block_id: _Block(rect, source, translated_for, translated, line_px)}` plus
 `last_scan_id` and `suppressed_at_scan`, and is fed by snapshots ordered by
-`scan_id`.
+`scan_id`. Each snapshot also carries `scan_interval_s` and `scan_ms`.
 
 | event | action |
 |---|---|
@@ -263,7 +265,7 @@ breaks a row fails the suite.
 | `OCR_RESULT` | ignore when `event.scan_id <= last_scan_id` (return the current render unchanged, never `[]`). Otherwise, per view: create/update. If the normalised source differs from the stored source by **any** character, set `translated=""`, `translated_for=""`. Apply rect/line_px/last_seen. Remove stored ids absent from the snapshot (count them in `hidden_stale`). Then `last_scan_id = event.scan_id`, and if `suppressed` and `scan_id > suppressed_at_scan`, set `suppressed=False`. |
 | `TRANSLATION_RESULT` | apply only when `normalise(item.source) == stored.source` exactly; set `translated`, `translated_for = item.source` |
 | `CAPTURE_HEALTH` | `WGC_FALLBACK` is a working frame: ignore. `RECREATING`, `BLACK`, `BLOCKED`: keep painting up to 1 s, then `suppressed=True`, `suppressed_at_scan = last_scan_id`. Health OK does **not** unsuppress. |
-| no OCR event >= 1.5 s | `suppressed=True`, `suppressed_at_scan = last_scan_id` (watchdog on the drain timer) |
+| no OCR event >= `watchdog_s` | `suppressed=True`, `suppressed_at_scan = last_scan_id` (watchdog on the drain timer) |
 | `SKIP` | removed from the event set |
 
 - Suppression is a render gate, not a data wipe: `translated` stays in memory,
@@ -281,6 +283,11 @@ breaks a row fails the suite.
 Ordering invariant: one OCR worker and a monotonic `scan_id` per epoch. A pass
 that finishes late can never roll state back (dropped by `scan_id`), and an MT
 result can only satisfy the exact text it was requested for.
+
+Watchdog: `watchdog_s = max(1.5, scan_interval_s + scan_ms / 1000 + 0.35)`,
+recomputed from every applied snapshot. A fixed 1.5 s would suppress between two
+normal snapshots on the slow machine the budget table measures (852 ms pass,
+1.278 s interval), producing a periodic flicker instead of a hang detector.
 
 ### 4.7 Status and instrumentation
 
@@ -454,3 +461,9 @@ low-VRAM machine, and it reuses `_OnlineBase`-like HTTP or a thin local class.
 11. A snapshot that arrives while the overlay is suppressed repaints the same
     text without a new translation request; `pipeline._last_mt` is never cleared
     by suppression.
+12. The watchdog is derived, not fixed:
+    `max(1.5, scan_interval_s + scan_ms / 1000 + 0.35)` from the last snapshot,
+    so a slow machine cannot flicker between normal snapshots.
+13. An unmatched block overlapped by a matched block (IoU >= 0.1) is dropped
+    immediately even inside its TTL, so a moved/re-read paragraph cannot ghost
+    its old translation at the old rect.

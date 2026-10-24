@@ -70,7 +70,14 @@ def fake_argos(monkeypatch):
     package_mod.get_available_packages = lambda: list(packages)
     package_mod.update_package_index = lambda: None
     translation_mod = types.ModuleType("argostranslate.translate")
-    translation_mod.get_translation_from_codes = lambda f, t: translation if installed else None
+
+    def get_translation_from_codes(f, t):
+        if not installed:
+            # the real API raises when no language packs are installed at all
+            raise AttributeError("'NoneType' object has no attribute 'get_translation'")
+        return translation
+
+    translation_mod.get_translation_from_codes = get_translation_from_codes
     root = types.ModuleType("argostranslate")
     root.package = package_mod
     root.translate = translation_mod
@@ -110,7 +117,7 @@ Expected: `ModuleNotFoundError: ocrtrans.argos`.
 
 - [ ] **Step 3: Implement `src/ocrtrans/argos.py`**
 
-`load()` imports inside the method, raises `RuntimeError("argostranslate is not installed; run: pip install argostranslate")` on `ImportError`. Then: `tr = translation.get_translation_from_codes(from_code, to_code)`; if it is `None`, call `update_package_index()`, pick `from_code=="en" and to_code=="vi"` from `get_available_packages()`, call `install()` once, and **re-read** `get_translation_from_codes` (the installed model only appears after install). If it is still `None`, raise `RuntimeError("Argos en->vi model is not available")`. Cache `tr` and mark installation done so a second `load()` does not install again. `translate` maps the cached object over the list. `unload()` drops the reference.
+`load()` imports inside the method, raises `RuntimeError("argostranslate is not installed; run: pip install argostranslate")` on `ImportError`, and is idempotent (return early when the translation object is already cached). Resolve the translation object through a helper that wraps `translate.get_translation_from_codes(from_code, to_code)` in `try/except (AttributeError, StopIteration)` and returns `None` on failure — the real API **raises** `AttributeError` when no language packs are installed at all, it does not return `None`. When `None`: call `update_package_index()`, pick `from_code=="en" and to_code=="vi"` from `get_available_packages()`, call `install()`, and re-read through the same helper; wrap index/install errors in `RuntimeError("could not install the Argos en->vi model: ...")` (the real `get_available_packages` can recurse when the index is missing and the download fails). If the re-read is still `None`, raise `RuntimeError("Argos en->vi model is not available")`. `translate` maps the cached object over the list. `unload()` drops the reference.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
