@@ -98,7 +98,11 @@ def group_blocks(
                 abs(box.rect.y - last.rect.y) <= 0.2 * line_h
                 and -0.4 * line_h <= h_gap <= 0.4 * line_h
             )
-            same_column = abs(box.rect.x - group[0].rect.x) <= 2 * line_h
+            first = group[0]
+            # Centred captions indent the second line by more than two line
+            # heights; what identifies one paragraph is horizontal overlap.
+            overlap = min(first.rect.right, box.rect.right) - max(first.rect.x, box.rect.x)
+            same_column = overlap >= 0.5 * min(first.rect.w, box.rect.w)
             vertical = -0.2 * line_h <= v_gap <= max_gap_ratio * line_h and same_column
             if same_row or vertical:
                 group.append(box)

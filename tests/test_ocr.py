@@ -99,6 +99,26 @@ def test_split_line_is_one_block():
     assert blocks[0].text == "Open the gate"
 
 
+def test_centred_wrapped_caption_is_one_block():
+    # Geometry from a real game subtitle: two centred lines of one sentence,
+    # the second indented by more than two line heights.
+    boxes = [
+        Box(
+            Rect(0, 0, 1240, 46),
+            "Not what you would expect from a Sentinel, is it? But that's exactly",
+            0.95,
+        ),
+        Box(
+            Rect(160, 58, 920, 46),
+            "why, through all this, we haven't lost ourselves.",
+            0.95,
+        ),
+    ]
+    blocks = group_blocks(boxes)
+    assert len(blocks) == 1
+    assert "lost ourselves" in blocks[0].text
+
+
 def test_plan_tiles_covers_a_2560x1440_region_in_at_most_four_tiles():
     tiles = plan_tiles(2560, 1440)
     assert 1 < len(tiles) <= 4
