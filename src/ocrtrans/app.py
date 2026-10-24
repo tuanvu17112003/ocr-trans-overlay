@@ -252,7 +252,7 @@ def main() -> int:
         if pipeline is not None:
             pipeline.set_regions(rects)
         overlay.set_regions(rects)
-        window.set_regions(len(rects))
+        window.refresh_regions()
 
     def apply_settings(new_cfg: Config) -> None:
         save_config(new_cfg)
@@ -270,7 +270,7 @@ def main() -> int:
         if pipeline is not None:
             pipeline.set_regions(rects)
         overlay.set_regions(rects)
-        window.set_regions(len(rects))
+        window.refresh_regions()
 
     def shutdown() -> None:
         hotkeys.unregister_all()
@@ -297,8 +297,18 @@ def main() -> int:
             window.show()
             window.raise_()
 
-    window = ControlWindow(cfg, start, stop, pick, apply_settings, status, on_close=app.quit)
-    window.set_regions(len(RegionSet.from_config(cfg, screen)))
+    window = ControlWindow(
+        cfg,
+        start,
+        stop,
+        pick,
+        lambda index: None,
+        lambda index: None,
+        apply_settings,
+        status,
+        screen,
+        on_close=app.quit,
+    )
     window.show()
 
     try:

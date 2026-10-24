@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -18,6 +19,8 @@ from PyQt6.QtWidgets import (
 )
 
 from ..config import ENGINES, Config
+from ..geometry import Rect
+from ..regions import NormalizedRegion, to_physical
 
 ONLINE_ENGINES = {"google", "gemini", "deepl", "mymemory"}
 
@@ -28,19 +31,25 @@ class ControlWindow(QWidget):
         config: Config,
         on_start: Callable[[], None],
         on_stop: Callable[[], None],
-        on_pick_region: Callable[[], None],
+        on_add_region: Callable[[], None],
+        on_adjust_region: Callable[[int], None],
+        on_delete_region: Callable[[int], None],
         on_apply: Callable[[Config], None],
         status_provider: Callable[[], dict],
+        monitor: Rect,
         on_close: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.on_start = on_start
         self.on_stop = on_stop
-        self.on_pick_region = on_pick_region
+        self.on_add_region = on_add_region
+        self.on_adjust_region = on_adjust_region
+        self.on_delete_region = on_delete_region
         self.on_apply = on_apply
         self.status_provider = status_provider
         self.on_close = on_close
+        self.monitor = monitor
         self.running = False
 
         self.setWindowTitle("OCRTrans - screen translation")
@@ -61,15 +70,22 @@ class ControlWindow(QWidget):
         self.fps.setRange(5, 30)
         self.fps.setValue(config.capture_fps)
         self.mode = QComboBox()
-        self.mode.addItems(["single", "multi", "monitor"])
+        self.mode.addItems(["single", "multi"])
         self.mode.setCurrentText(config.region_mode)
         self.min_font = QSpinBox()
         self.min_font.setRange(8, 32)
         self.min_font.setValue(config.min_font_px)
 
-        self.region_button = QPushButton("Pick region")
-        self.region_button.clicked.connect(self.on_pick_region)
-        self.region_label = QLabel("1 region")
+        self.region_list = QListWidget()
+        self.add_button = QPushButton("Add region")
+        self.adjust_button = QPushButton("Adjust")
+        self.delete_button = QPushButton("Delete")
+        self.add_button.clicked.connect(lambda: self.on_add_region())
+        self.adjust_button.clicked.connect(self._adjust_region)
+        self.delete_button.clicked.connect(self._delete_region)
+        self.region_list.currentRowChanged.connect(lambda _row: self._refresh_region_buttons())
+        self.mode.currentTextChanged.connect(lambda _mode: self.refresh_regions())
+
         self.start_button = QPushButton("Start")
         self.start_button.clicked.connect(self._toggle)
         self.status_label = QLabel("stopped")
@@ -83,14 +99,18 @@ class ControlWindow(QWidget):
         form.addRow("Stability", self.profile)
         form.addRow("FPS", self.fps)
         form.addRow("Region mode", self.mode)
-        form.addRow("", self.region_button)
-        form.addRow("", self.region_label)
+        form.addRow("", self.region_list)
+        form.addRow("", self.add_button)
+        form.addRow("", self.adjust_button)
+        form.addRow("", self.delete_button)
         form.addRow("Min font px", self.min_font)
         form.addRow("", self.start_button)
         form.addRow("Status", self.status_label)
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+
+        self.refresh_regions()
 
         self.engine.currentTextChanged.connect(self._sync_keys)
         self._sync_keys(self.engine.currentText())
@@ -118,8 +138,39 @@ class ControlWindow(QWidget):
         self.running = running
         self.start_button.setText("Stop" if running else "Start")
 
-    def set_regions(self, count: int) -> None:
-        self.region_label.setText(f"{count} region(s)")
+    def selected_region(self) -> int | None:
+        row = self.region_list.currentRow()
+        return row if row >= 0 else None
+
+    def refresh_regions(self) -> None:
+        current = self.selected_region()
+        self.region_list.clear()
+        applied = 1 if self.mode.currentText() == "single" else len(self.config.regions)
+        for index, raw in enumerate(self.config.regions):
+            rect = to_physical(NormalizedRegion(**raw), self.monitor)
+            text = f"{index + 1}  ·  {rect.w} × {rect.h}"
+            if index >= applied:
+                text += "  (inactive)"
+            self.region_list.addItem(text)
+        if current is not None and self.region_list.count():
+            self.region_list.setCurrentRow(min(current, self.region_list.count() - 1))
+        self._refresh_region_buttons()
+
+    def _refresh_region_buttons(self) -> None:
+        selected = self.selected_region() is not None
+        self.adjust_button.setEnabled(selected)
+        self.delete_button.setEnabled(selected and len(self.config.regions) > 1)
+        self.start_button.setEnabled(bool(self.config.regions))
+
+    def _adjust_region(self) -> None:
+        index = self.selected_region()
+        if index is not None:
+            self.on_adjust_region(index)
+
+    def _delete_region(self) -> None:
+        index = self.selected_region()
+        if index is not None:
+            self.on_delete_region(index)
 
     def set_status_text(self, text: str) -> None:
         self.status_label.setText(text)
