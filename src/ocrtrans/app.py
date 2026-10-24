@@ -15,7 +15,13 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 
 from .blocks import BlockMemory
-from .capture import CaptureManager, DxgiBackend, WgcBackend
+from .capture import (
+    CaptureManager,
+    DxgiBackend,
+    WgcBackend,
+    enumerate_monitors,
+    primary_monitor_index,
+)
 from .config import Config, load_config, save_config
 from .exclusion import AffinityGate
 from .geometry import Rect
@@ -67,9 +73,29 @@ def build_local(name: str):
     return local
 
 
+def local_engine(name: str):
+    """Build a local model; without its runtime (CPU build) use Argos instead."""
+    try:
+        return build_local(name)
+    except ImportError as exc:
+        missing = (getattr(exc, "name", "") or "").split(".")[0]
+        known = {"transformers", "huggingface_hub", "torch", "sentencepiece"}
+        log.warning(
+            "%s needs transformers; using argos (%s)",
+            name,
+            exc,
+            exc_info=missing not in known,
+        )
+        from .argos import ArgosEngine
+
+        engine = ArgosEngine()
+        engine.load()
+        return engine
+
+
 def build_engine(cfg: Config):
     if cfg.engine in LOCAL_REPOS:
-        return build_local(cfg.engine)
+        return local_engine(cfg.engine)
     if cfg.engine == "argos":
         from .argos import ArgosEngine
 
@@ -78,7 +104,7 @@ def build_engine(cfg: Config):
         return engine
     if not cfg.online_consent:
         log.warning("online engine selected without consent; falling back to nllb")
-        return build_local("nllb")
+        return local_engine("nllb")
 
     session = requests.Session()
     if cfg.engine == "google":
@@ -89,7 +115,7 @@ def build_engine(cfg: Config):
         primary = DeepLEngine(cfg.keys.get("deepl", ""), session)
     else:
         primary = GeminiEngine(cfg.keys.get("gemini", ""), session)
-    fallback = build_local("nllb") if cfg.fallback_to_local else None
+    fallback = local_engine("nllb") if cfg.fallback_to_local else None
     return OnlineRouter(primary, fallback)
 
 
@@ -111,13 +137,29 @@ def main() -> int:
     overlay.hide()
     outline = RegionOutline(screen)
 
+    monitors = enumerate_monitors()
+    monitor_index = primary_monitor_index(monitors)
+    monitor_rect = next((rect for rect, primary in monitors if primary), None)
+    log.info(
+        "capture monitor %s %s (of %s)",
+        monitor_index,
+        monitor_rect,
+        [rect for rect, _primary in monitors],
+    )
+
     if os.environ.get("OCRTRANS_DXGI"):
-        capture = CaptureManager(DxgiBackend(), WgcBackend(monitor_index=1))
+        capture = CaptureManager(
+            DxgiBackend(),
+            WgcBackend(monitor_index=monitor_index, monitor_rect=monitor_rect),
+        )
     else:
         # WGC first: an active Desktop Duplication session keeps the output out
         # of the video's independent-flip path and measurably drops frames
         # (5-8 per 15 s at 1440p60 in Edge; WGC dropped 0 in the same runs).
-        capture = CaptureManager(WgcBackend(monitor_index=1), DxgiBackend())
+        capture = CaptureManager(
+            WgcBackend(monitor_index=monitor_index, monitor_rect=monitor_rect),
+            DxgiBackend(),
+        )
     log.info(
         "capture %s (backup %s); overlay %s; debug %s; region %s",
         type(capture.main).__name__,
@@ -129,6 +171,7 @@ def main() -> int:
     state: dict = {
         "pipeline": None,
         "engine_name": None,
+        "engine_request": None,
         "running": False,
         "starting": False,
         "picking": False,
@@ -158,6 +201,7 @@ def main() -> int:
             **pipeline.stats(),
             "engine": state["engine_name"] or cfg.engine,
             "health": capture.health.name,
+            "monitor_mismatch": getattr(capture.main, "monitor_mismatch", False),
             "error": state["error"],
             "rendered": overlay.shown,
             "hidden_stale": overlay.state.hidden_stale,
@@ -183,7 +227,10 @@ def main() -> int:
             return None
         finally:
             QApplication.restoreOverrideCursor()
-        state["error"] = ""
+        if engine.name != config.engine:
+            state["error"] = f"{config.engine} unavailable; using {engine.name}"
+        else:
+            state["error"] = ""
         return engine
 
     def start() -> None:
@@ -225,8 +272,9 @@ def main() -> int:
             pipeline.start()
             state["pipeline"] = pipeline
             state["engine_name"] = engine.name
+            state["engine_request"] = cfg.engine
         else:
-            if state["engine_name"] != cfg.engine:
+            if state["engine_request"] != cfg.engine:
                 # free the old model before the new one allocates VRAM
                 pipeline.set_enabled(False)
                 if not pipeline.unload_engine():
@@ -234,12 +282,14 @@ def main() -> int:
                     window.set_running(False)
                     return
                 state["engine_name"] = None
+                state["engine_request"] = None
                 engine = load_engine(cfg)
                 if engine is None:
                     window.set_running(False)
                     return
                 pipeline.adopt_engine(engine)
                 state["engine_name"] = engine.name
+                state["engine_request"] = cfg.engine
             pipeline.set_fps(cfg.capture_fps)
             pipeline.set_profile(cfg.stability_profile)
             rects = RegionSet.from_config(cfg, screen)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ctypes
+import logging
 import threading
 import time
 from enum import Enum, auto
@@ -11,6 +13,94 @@ import cv2
 import numpy as np
 
 from .geometry import Rect
+
+log = logging.getLogger(__name__)
+
+MONITORINFOF_PRIMARY = 1
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_ulong),
+        ("rcMonitor", _RECT),
+        ("rcWork", _RECT),
+        ("dwFlags", ctypes.c_ulong),
+    ]
+
+
+def enumerate_monitors() -> list[tuple[Rect, bool]]:
+    """Every active monitor in EnumDisplayMonitors order, rects in physical px.
+
+    The capture library indexes monitors one-based into this same enumeration,
+    so the position in this list is the index to pass it. Returns [] on failure
+    (the caller then keeps index 1).
+    """
+    monitors: list[tuple[Rect, bool]] = []
+    try:
+        user32 = ctypes.windll.user32
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)]
+        user32.GetMonitorInfoW.restype = ctypes.c_int
+        user32.EnumDisplayMonitors.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        user32.EnumDisplayMonitors.restype = ctypes.c_int
+        callback_type = ctypes.WINFUNCTYPE(
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(_RECT),
+            ctypes.c_void_p,
+        )
+
+        def collect(hmonitor, hdc, lprc, data) -> int:
+            info = _MONITORINFO()
+            info.cbSize = ctypes.sizeof(_MONITORINFO)
+            if user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
+                r = info.rcMonitor
+                monitors.append(
+                    (
+                        Rect(r.left, r.top, r.right - r.left, r.bottom - r.top),
+                        bool(info.dwFlags & MONITORINFOF_PRIMARY),
+                    )
+                )
+            return 1
+
+        user32.EnumDisplayMonitors(None, None, callback_type(collect), 0)
+    except Exception:  # noqa: BLE001 - enumeration is best effort
+        log.exception("monitor enumeration failed; assuming index 1 is primary")
+        return []
+    return monitors
+
+
+def primary_monitor_index(monitors: list[tuple[Rect, bool]], fallback: int = 1) -> int:
+    for index, (_rect, primary) in enumerate(monitors, start=1):
+        if primary:
+            return index
+    return fallback
+
+
+def monitor_size_matches(frame_wh: tuple[int, int], monitor: Rect) -> bool:
+    return (frame_wh[0], frame_wh[1]) == (monitor.w, monitor.h)
+
+
+def needs_monitor_retry(
+    frame_wh: tuple[int, int], monitor_rect: Rect | None, already_retried: bool
+) -> bool:
+    if monitor_rect is None or already_retried:
+        return False
+    return not monitor_size_matches(frame_wh, monitor_rect)
 
 
 class Health(Enum):
@@ -107,22 +197,33 @@ class WgcBackend:
         window_name: str | None = None,
         monitor_index: int | None = None,
         window_hwnd: int | None = None,
+        monitor_rect: Rect | None = None,
     ) -> None:
-        from windows_capture import WindowsCapture
-
         self._latest: np.ndarray | None = None
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
         self._rect: Rect | None = None
         self._wanted = False
         self._seq = 0
+        self._window_name = window_name
+        self._window_hwnd = window_hwnd
+        self._monitor_rect = monitor_rect
+        self._retried_monitor = False
+        self._retry_requested = False
+        self.monitor_mismatch = False
         self.full_dark = False
+        self._thread: threading.Thread | None = None
+        self._build_capture(monitor_index)
+
+    def _build_capture(self, monitor_index: int | None) -> None:
+        from windows_capture import WindowsCapture
+
         self._capture = WindowsCapture(
             cursor_capture=False,
             draw_border=False,
-            window_name=window_name if window_hwnd is None else None,
-            window_hwnd=window_hwnd,
-            monitor_index=monitor_index if (window_name is None and window_hwnd is None) else None,
+            window_name=self._window_name if self._window_hwnd is None else None,
+            window_hwnd=self._window_hwnd,
+            monitor_index=monitor_index if (self._window_name is None and self._window_hwnd is None) else None,
         )
 
         @self._capture.event
@@ -132,8 +233,6 @@ class WgcBackend:
         @self._capture.event
         def on_closed() -> None:
             pass
-
-        self._thread: threading.Thread | None = None
 
     def _ensure_started(self) -> None:
         if self._thread is None:
@@ -151,6 +250,21 @@ class WgcBackend:
         image = frame.convert_to_bgr().frame_buffer
         self.full_dark = _is_dark_sample(image, "bgra8")
         height, width = image.shape[:2]
+        with self._lock:
+            retry = needs_monitor_retry(
+                (width, height), self._monitor_rect, already_retried=self._retried_monitor
+            )
+            if retry:
+                self._retried_monitor = True
+                self._retry_requested = True
+        if retry:
+            log.error(
+                "captured %sx%s but the primary monitor is %sx%s; retrying monitor 1",
+                width,
+                height,
+                self._monitor_rect.w if self._monitor_rect else "?",
+                self._monitor_rect.h if self._monitor_rect else "?",
+            )
         x0 = min(max(0, rect.x), width)
         x1 = min(max(x0, rect.right), width)
         y0 = min(max(0, rect.y), height)
@@ -163,6 +277,13 @@ class WgcBackend:
 
     def grab(self, rect: Rect) -> np.ndarray | None:
         with self._lock:
+            retry = self._retry_requested
+            if retry:
+                self._retry_requested = False
+        if retry:
+            self.monitor_mismatch = True
+            self._restart_with_primary()
+        with self._lock:
             self._rect = rect
             self._wanted = True
             seen = self._seq
@@ -170,6 +291,21 @@ class WgcBackend:
         with self._cv:
             self._cv.wait_for(lambda: self._seq != seen, timeout=0.1)
             return self._latest
+
+    def _restart_with_primary(self) -> None:
+        # Never tear the session down on the capture thread; grab() runs here.
+        try:
+            self._capture.stop()
+        except Exception:  # noqa: BLE001 - a dead session is fine to replace
+            pass
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=0.5)
+        self._thread = None
+        with self._lock:
+            self._latest = None
+            self._seq += 1
+        self._build_capture(1)
 
     def close(self) -> None:
         try:

@@ -109,17 +109,20 @@ def fit_text(
     *,
     line_px: int = 0,
     min_font_px: int = 12,
+    limit_bottom: int | None = None,
 ) -> FitResult:
     """Size from the source line height, shrink inside the box, then ellipsize.
 
-    The painted box never leaves the source rectangle: no widening, no vertical
-    growth. line_px is one OCR line height; 0 falls back to the block height.
+    The painted box never leaves the source rectangle horizontally. limit_bottom
+    lets the cover grow downwards (a longer translation) up to that screen row.
+    line_px is one OCR line height; 0 falls back to the block height.
     """
     text = " ".join(text.split())
     anchor = line_px if line_px > 0 else source.h * 0.8
     base_font = max(min_font_px, min(round(anchor * 0.8), source.h))
     width = max(1, min(source.w, screen.right - source.x))
-    max_h = max(1, source.h)
+    bottom = source.bottom if limit_bottom is None else max(source.bottom, limit_bottom)
+    max_h = max(1, bottom - source.y)
 
     def rect_for(height: int) -> Rect:
         return Rect(source.x, source.y, width, max(1, min(max_h, height)))
