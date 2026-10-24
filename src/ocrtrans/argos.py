@@ -24,7 +24,9 @@ class ArgosEngine:
                 import argostranslate.translate as translate
             except ImportError as exc:
                 raise RuntimeError(
-                    "argostranslate is not installed; run: pip install argostranslate"
+                    "argostranslate is not usable "
+                    f"({exc}). Install it with: pip install --no-deps "
+                    "argostranslate ctranslate2 stanza==1.10.1 minisbd emoji"
                 ) from exc
 
             translation = self._resolve(translate)

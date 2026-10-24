@@ -108,15 +108,30 @@ and because its cost is measurable and testable (passes per second, OCR ms).
 
 ```
 loop:
-  if pending OCR frame: sleep 16ms; continue    # never replace a frame
-  frame, health = capture.grab(region)          # at fps while idle
-  if frame is None: emit health, sleep to next tick; continue
+  if pending OCR frame: sleep 10ms; continue    # never replace a frame
+  due = last_ocr_end + interval
+  if now < due:
+      sleep to due (50ms ticks; 250ms during the empty backoff)
+      if not backoff: continue                  # one grab per pass, not per tick
+  frame, health = capture.grab(region)
+  if frame is None: emit health, sleep 50ms; continue
   wake = changed_pixels_ratio(320px gray) > 0.01
   interval = budget.interval(last_ocr_ms, empty_count, wake)   # single owner
-  if now - last_ocr_end < interval: sleep to next tick; continue
+  if now - last_ocr_end < interval: continue
   scan_id += 1
   emit SCAN_START(frame, health, scan_id) -> ocr queue (depth 1)
 ```
+
+As built (2026-10-24, after the stutter report): a full 2560x1440 HDR frame
+tonemapped at 52 ms per grab while the OCR strip is 1760x53, so the loop now
+grabs **only when a pass is due** (about 1-4 grabs/s instead of 15-28) and
+tonemaps **only the region** (~1.3 ms). During the empty backoff it keeps a
+250 ms sampling cadence so a changed frame can still wake it. Black detection
+uses a 1/64 sample of the **full frame**: an empty or dark subtitle strip is
+normal and must not be mistaken for a black screen (which used to trip the WGC
+fallback needlessly). The WGC callback crops each arriving frame before copying.
+Measured on the same machine: idle capture CPU 90% -> ~15% of one core at 3.4
+grabs/s, OCR strip pass ~15-20 ms, EnViT5 batch of 3 ~193 ms / 614 MB VRAM.
 
 - **At most one OCR pass in flight.** The capture thread does not grab while a
   frame is pending, so the pending frame is never replaced. This makes latency

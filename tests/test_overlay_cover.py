@@ -51,3 +51,36 @@ def test_background_fills_the_cover_with_opaque_color(qapp):
         assert color.alpha() == 255, (x, y)
         assert color.name() == expected, (x, y, color.name())
     overlay.close()
+
+
+def test_an_unchanged_snapshot_does_not_repaint(qapp):
+    from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent
+
+    events = queue.Queue()
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), events)
+    view = BlockView(1, Rect(100, 100, 200, 80), "Hello world", "stable", 20)
+    events.put(PipelineEvent(kind=EventKind.OCR_RESULT, epoch=1, at=0.0, scan_id=1, blocks=[view]))
+    events.put(
+        PipelineEvent(
+            kind=EventKind.TRANSLATION_RESULT,
+            epoch=1,
+            at=0.0,
+            scan_id=1,
+            items=[make_item(text="Xin chao")],
+        )
+    )
+    calls = []
+    original = overlay._recompute
+
+    def counted():
+        calls.append(1)
+        original()
+
+    overlay._recompute = counted
+    overlay._drain()
+    assert calls == [1]
+
+    events.put(PipelineEvent(kind=EventKind.OCR_RESULT, epoch=1, at=0.0, scan_id=2, blocks=[view]))
+    overlay._drain()
+    assert calls == [1], "an identical snapshot repainted the whole overlay"
+    overlay.close()

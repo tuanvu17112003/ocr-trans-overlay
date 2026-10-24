@@ -28,12 +28,19 @@ Downloaded once into the Hugging Face cache on first start:
 |---|---|---|
 | `nllb` (default) | `facebook/nllb-200-distilled-600M` | ~2.4 GB |
 | `envit5` | `VietAI/envit5-translation` | ~1.0 GB |
-| `argos` (optional) | Argos en->vi package, downloaded on first use | ~100 MB |
+| `argos` (optional) | Argos en->vi package, downloaded on first use | ~0.8 GB |
 
 OCR models ship inside the `rapidocr` wheel (PP-OCRv6 det/rec small).
 
-`argos` needs the optional package: `.venv\Scripts\python -m pip install argostranslate`.
-It runs on CPU and installs its language pack on first start.
+`argos` needs the optional package, installed without dependencies so the CUDA
+`onnxruntime-gpu` is not replaced by the CPU build:
+
+```bat
+.venv\Scripts\python -m pip install --no-deps argostranslate ctranslate2 "stanza==1.10.1" minisbd emoji
+```
+
+It runs on CPU and downloads its language packs into `%USERPROFILE%\.local\share\argos-translate`
+on first start (a few hundred MB; the en->vi route may pivot).
 
 ## Run
 
@@ -133,9 +140,13 @@ Run the harness yourself:
 - Scans are text-first: the full region is OCR'd at a fixed budget (one pass in flight,
   the next start is measured from the end of the previous pass and never faster than
   1.5x the last pass time), so background motion, video or a moving camera costs nothing.
-  A screen with no text backs off to one pass per second until a cheap 320 px luma diff
-  says something changed. The status line shows `text N`, `shown N`, `tiled N`, `scan N ms`
-  and `hidden N`.
+  Capture grabs only when a pass is due (plus a 250 ms sample while empty), so the loop
+  costs ~15% of one core instead of a busy core. A screen with no text backs off to one
+  pass per second until a cheap 320 px luma diff says something changed. The status line
+  shows `text N`, `shown N`, `tiled N`, `scan N ms` and `hidden N`.
+- Black-screen detection samples the whole monitor, not the OCR strip: an empty or dark
+  subtitle area is normal and no longer trips the WGC fallback. The overlay itself is
+  excluded from capture, so it never feeds back into OCR.
 - Exact text decides validity: a one-character change ("100 HP" -> "10 HP") hides the
   block at once, and a translation can only paint over the text it was requested for.
   A block that is no longer in the snapshot disappears; the 0.4-1.0 s TTL keep exists so

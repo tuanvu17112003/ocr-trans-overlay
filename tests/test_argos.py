@@ -64,5 +64,5 @@ def test_translate_preserves_order(monkeypatch):
 
 def test_missing_dependency_raises_a_clear_error(monkeypatch):
     monkeypatch.setitem(sys.modules, "argostranslate", None)
-    with pytest.raises(RuntimeError, match="pip install argostranslate"):
+    with pytest.raises(RuntimeError, match="pip install --no-deps argostranslate"):
         ArgosEngine().load()

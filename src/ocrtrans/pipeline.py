@@ -18,7 +18,7 @@ from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
 from .geometry import Box, Rect, union_all
 from .ocr import group_blocks, merge_boxes, plan_tiles
-from .scan import MIN_INTERVAL_S, ScanBudget, frame_changed
+from .scan import EMPTY_BACKOFF_S, MIN_INTERVAL_S, WAKE_SAMPLE_S, ScanBudget, frame_changed
 from .stats import LatencyStats
 from .translate import Engine, TranslationService
 
@@ -318,24 +318,29 @@ class Pipeline:
     def _region(self) -> Rect:
         return union_all(self._regions) if self._regions else Rect(0, 0, 1920, 1080)
 
-    def _sleep_rest(self, started: float) -> None:
-        remaining = (1.0 / self.fps) - (self.clock() - started)
-        if remaining > 0:
-            time.sleep(remaining)
-
     def _capture_loop(self) -> None:
         while self._running:
-            started = self.clock()
             if not self.enabled:
                 time.sleep(0.05)
                 continue
-            if self._ocr_busy.is_set():
-                time.sleep(0.016)  # never replace a pending frame
+            if self._ocr_busy.is_set() or self._ocr_queue.qsize() > 0:
+                time.sleep(0.01)  # never replace a pending frame
                 continue
+
+            due = self._last_ocr_end + self._interval
+            now = self.clock()
+            if now < due:
+                # Grab only when a pass is due; during the empty backoff, sample
+                # slowly so one changed frame can still shorten the wait.
+                backoff = self._interval >= EMPTY_BACKOFF_S
+                time.sleep(min(due - now, WAKE_SAMPLE_S if backoff else 0.05))
+                if not backoff:
+                    continue
+
             gate = self.gate
             if gate is not None and not gate.acquire():
                 self._exclusion_missed += 1
-                self._sleep_rest(started)
+                time.sleep(0.05)
                 continue
             try:
                 frame, health = self.capture.grab(self._region())
@@ -353,7 +358,7 @@ class Pipeline:
                     )
                 )
             if frame is None:
-                self._sleep_rest(started)
+                time.sleep(0.05)
                 continue
 
             wake, self._wake_prev = frame_changed(self._wake_prev, frame)
@@ -363,13 +368,11 @@ class Pipeline:
             )
             self._interval = interval
             if self.clock() - self._last_ocr_end < interval:
-                self._sleep_rest(started)
                 continue
 
-            self._scan_id += 1
             self._wake = False  # the change is about to be scanned
+            self._scan_id += 1
             self._ocr_queue.put((self.epoch, self._scan_id, frame, self._region()))
-            self._sleep_rest(started)
 
     # ---- OCR --------------------------------------------------------------
 

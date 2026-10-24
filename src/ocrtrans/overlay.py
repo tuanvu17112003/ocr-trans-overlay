@@ -138,20 +138,19 @@ class OverlayWindow(QWidget):
     # ---- event pump -------------------------------------------------------
 
     def _drain(self) -> None:
-        changed = False
         now = time.monotonic()
+        latest = self._items
         while True:
             try:
                 event: PipelineEvent = self.events_queue.get_nowait()
             except queue.Empty:
                 break
-            self._items = self.state.on_event(event, now)
-            changed = True
+            latest = self.state.on_event(event, now)
         ticked = self.state.tick(now)
         if ticked is not None:
-            self._items = ticked
-            changed = True
-        if changed:
+            latest = ticked
+        if latest != self._items:
+            self._items = latest
             self._recompute()
             self.update()
 

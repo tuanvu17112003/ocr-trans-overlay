@@ -293,6 +293,30 @@ def test_capture_does_not_grab_while_ocr_is_running():
     p.stop()
 
 
+def test_capture_grabs_only_when_a_pass_is_due():
+    cap = CountingCapture(np.full((100, 200, 3), 30, np.uint8))
+    p = pipeline_with(capture=cap, fps=60)
+    p.start()
+    time.sleep(1.2)
+    passes = p.stats()["ocr_passes"]
+    grabs = cap.grabs
+    p.stop()
+    assert passes >= 3
+    assert grabs <= passes + 2
+
+
+def test_empty_backoff_does_not_spin_capture():
+    cap = CountingCapture(np.full((100, 200, 3), 30, np.uint8))
+    p = pipeline_with(capture=cap, ocr=FakeOcr(boxes=[]), fps=60)
+    p.start()
+    time.sleep(3.0)
+    passes = p.stats()["ocr_passes"]
+    grabs = cap.grabs
+    p.stop()
+    assert passes >= 3
+    assert grabs <= 20, "the capture loop spun while the empty backoff was active"
+
+
 def test_scan_interval_respects_measured_ocr_time():
     p = pipeline_with(ocr=SlowOcr(0.30), fps=60)
     p.start()

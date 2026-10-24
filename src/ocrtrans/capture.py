@@ -27,6 +27,30 @@ class CaptureBackend(Protocol):
     def close(self) -> None: ...
 
 
+def _is_dark_sample(image: np.ndarray, color_format: str) -> bool:
+    """Whole-frame luma at 1/64 stride: an empty subtitle strip is legitimately dark."""
+    sample = image[::64, ::64]
+    if color_format == "rgba16f":
+        return float(sample.astype(np.float32).mean()) < 0.01
+    return float(sample.mean()) < 2.0
+
+
+def _crop_bgr(image: np.ndarray, rect: Rect, color_format: str) -> np.ndarray:
+    """Tonemap only the requested region; a full 1440p HDR frame costs ~50 ms."""
+    height, width = image.shape[:2]
+    x0 = min(max(0, rect.x), width)
+    x1 = min(max(x0, rect.right), width)
+    y0 = min(max(0, rect.y), height)
+    y1 = min(max(y0, rect.bottom), height)
+    crop = image[y0:y1, x0:x1]
+    if color_format == "bgra8":
+        return crop[..., :3].copy()
+    if color_format == "rgba8":
+        return crop[..., 2::-1].copy()
+    normalized = np.clip(crop.astype(np.float32), 0.0, 1.0)
+    return (normalized[..., [2, 1, 0]] * 255.0).astype(np.uint8)
+
+
 class DxgiBackend:
     """Desktop Duplication. HDR screens return rgba16f, so always to_bgr()."""
 
@@ -34,6 +58,8 @@ class DxgiBackend:
         self._monitor_index = monitor_index
         self._session = None
         self._closed = False
+        self._first = True
+        self.full_dark = False
 
     def _ensure(self):
         # DXGI sessions are thread-affine: create on the capture thread.
@@ -47,20 +73,23 @@ class DxgiBackend:
         session = self._ensure()
         img = None
         # The first frames after session creation are often black; retry briefly.
-        for _ in range(4):
+        for _ in range(4 if self._first else 1):
             frame = session.acquire_frame(timeout_ms=16)
             if frame is None:
                 continue
-            img = frame.to_bgr()
-            if float(img[::16, ::16].mean()) >= 2.0:
+            image = frame.to_numpy()
+            self.full_dark = _is_dark_sample(image, frame.color_format)
+            img = _crop_bgr(image, rect, frame.color_format)
+            if not self.full_dark:
+                self._first = False
                 break
-        if img is None:
-            return None
-        return img[rect.y : rect.bottom, rect.x : rect.right]
+        return img
 
     def recreate(self) -> None:
         if self._session is not None:
             self._session.recreate()
+        self._first = True
+        self.full_dark = False
 
     def close(self) -> None:
         # Native DXGI sessions cannot be dropped off their creating thread;
@@ -81,6 +110,8 @@ class WgcBackend:
 
         self._latest: np.ndarray | None = None
         self._lock = threading.Lock()
+        self._rect: Rect | None = None
+        self.full_dark = False
         self._capture = WindowsCapture(
             cursor_capture=False,
             draw_border=False,
@@ -91,8 +122,7 @@ class WgcBackend:
 
         @self._capture.event
         def on_frame_arrived(frame, control) -> None:
-            with self._lock:
-                self._latest = frame.convert_to_bgr().frame_buffer.copy()
+            self._store_frame(frame)
 
         @self._capture.event
         def on_closed() -> None:
@@ -105,13 +135,28 @@ class WgcBackend:
             self._thread = threading.Thread(target=self._capture.start, daemon=True)
             self._thread.start()
 
+    def _store_frame(self, frame) -> None:
+        with self._lock:
+            rect = self._rect
+        if rect is None:
+            return
+        image = frame.convert_to_bgr().frame_buffer
+        self.full_dark = _is_dark_sample(image, "bgra8")
+        height, width = image.shape[:2]
+        x0 = min(max(0, rect.x), width)
+        x1 = min(max(x0, rect.right), width)
+        y0 = min(max(0, rect.y), height)
+        y1 = min(max(y0, rect.bottom), height)
+        crop = image[y0:y1, x0:x1].copy()
+        with self._lock:
+            self._latest = crop
+
     def grab(self, rect: Rect) -> np.ndarray | None:
+        with self._lock:
+            self._rect = rect
         self._ensure_started()
         with self._lock:
-            img = self._latest
-        if img is None:
-            return None
-        return img[rect.y : rect.bottom, rect.x : rect.right]
+            return self._latest
 
     def close(self) -> None:
         try:
@@ -177,8 +222,11 @@ class CaptureManager:
             self._health = Health.OK
             return None, self._health
 
-        luma = float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean()) if frame.ndim == 3 else float(frame.mean())
-        if luma < 2.0:
+        dark = getattr(self.main, "full_dark", None)
+        if dark is None:
+            luma = float(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).mean()) if frame.ndim == 3 else float(frame.mean())
+            dark = luma < 2.0
+        if dark:
             self._black += 1
             if self._black >= 3:
                 self._activate_fallback()

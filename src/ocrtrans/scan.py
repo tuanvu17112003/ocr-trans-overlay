@@ -11,6 +11,7 @@ EMPTY_BACKOFF_S = 1.0
 EMPTY_PASSES = 3
 TTL_MIN_S = 0.4
 TTL_MAX_S = 1.0
+WAKE_SAMPLE_S = 0.25
 
 
 class ScanBudget:
