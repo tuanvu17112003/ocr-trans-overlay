@@ -28,8 +28,12 @@ Downloaded once into the Hugging Face cache on first start:
 |---|---|---|
 | `nllb` (default) | `facebook/nllb-200-distilled-600M` | ~2.4 GB |
 | `envit5` | `VietAI/envit5-translation` | ~1.0 GB |
+| `argos` (optional) | Argos en->vi package, downloaded on first use | ~100 MB |
 
 OCR models ship inside the `rapidocr` wheel (PP-OCRv6 det/rec small).
+
+`argos` needs the optional package: `.venv\Scripts\python -m pip install argostranslate`.
+It runs on CPU and installs its language pack on first start.
 
 ## Run
 
@@ -63,6 +67,7 @@ Settings and regions are stored in `%LOCALAPPDATA%\OCRTrans\config.json`; logs i
 |---|---|---|---|
 | NLLB-600M | local | unlimited | ~1.25 GB VRAM, best default |
 | EnViT5 | local | unlimited | ~0.64 GB VRAM, fastest local |
+| Argos | local | unlimited | CPU only, small model, optional install |
 | Google (unofficial) | online | unofficial, can throttle/block | no key, may break without notice |
 | Gemini | online | free API quota (per-project, changes over time) | needs API key |
 | DeepL Free | online | 500k chars/month, 1 request/s | needs API key |

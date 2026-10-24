@@ -59,6 +59,12 @@ def build_local(name: str):
 def build_engine(cfg: Config):
     if cfg.engine in LOCAL_REPOS:
         return build_local(cfg.engine)
+    if cfg.engine == "argos":
+        from .argos import ArgosEngine
+
+        engine = ArgosEngine()
+        engine.load()
+        return engine
     if not cfg.online_consent:
         log.warning("online engine selected without consent; falling back to nllb")
         return build_local("nllb")
