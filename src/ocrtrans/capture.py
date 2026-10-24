@@ -47,6 +47,15 @@ def enumerate_monitors() -> list[tuple[Rect, bool]]:
     monitors: list[tuple[Rect, bool]] = []
     try:
         user32 = ctypes.windll.user32
+        user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)]
+        user32.GetMonitorInfoW.restype = ctypes.c_int
+        user32.EnumDisplayMonitors.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        user32.EnumDisplayMonitors.restype = ctypes.c_int
         callback_type = ctypes.WINFUNCTYPE(
             ctypes.c_int,
             ctypes.c_void_p,
@@ -241,11 +250,14 @@ class WgcBackend:
         image = frame.convert_to_bgr().frame_buffer
         self.full_dark = _is_dark_sample(image, "bgra8")
         height, width = image.shape[:2]
-        if needs_monitor_retry(
-            (width, height), self._monitor_rect, already_retried=self._retried_monitor
-        ):
-            self._retried_monitor = True
-            self._retry_requested = True
+        with self._lock:
+            retry = needs_monitor_retry(
+                (width, height), self._monitor_rect, already_retried=self._retried_monitor
+            )
+            if retry:
+                self._retried_monitor = True
+                self._retry_requested = True
+        if retry:
             log.error(
                 "captured %sx%s but the primary monitor is %sx%s; retrying monitor 1",
                 width,
@@ -264,8 +276,11 @@ class WgcBackend:
             self._cv.notify_all()
 
     def grab(self, rect: Rect) -> np.ndarray | None:
-        if self._retry_requested:
-            self._retry_requested = False
+        with self._lock:
+            retry = self._retry_requested
+            if retry:
+                self._retry_requested = False
+        if retry:
             self.monitor_mismatch = True
             self._restart_with_primary()
         with self._lock:
@@ -283,8 +298,14 @@ class WgcBackend:
             self._capture.stop()
         except Exception:  # noqa: BLE001 - a dead session is fine to replace
             pass
-        self._build_capture(1)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout=0.5)
         self._thread = None
+        with self._lock:
+            self._latest = None
+            self._seq += 1
+        self._build_capture(1)
 
     def close(self) -> None:
         try:

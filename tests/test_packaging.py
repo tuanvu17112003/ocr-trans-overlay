@@ -57,3 +57,21 @@ def test_installer_is_valid_powershell():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_installer_dry_run_prints_every_step_and_changes_nothing():
+    if shutil.which("powershell") is None:
+        pytest.skip("no PowerShell on this machine")
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-File", "install.ps1", "-Cpu", "-DryRun"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    out = result.stdout
+    assert "venv .venv" in out
+    assert "requirements-cpu.txt" in out
+    assert '"-e"' not in out  # rendered as arguments, not PowerShell syntax
+    assert "pip install -e . --no-deps" in out
+    assert "Installed the CPU build" not in out

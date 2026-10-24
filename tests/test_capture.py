@@ -220,3 +220,24 @@ def test_enumerate_monitors_never_raises():
     assert isinstance(monitors, list)
     for rect, primary in monitors:
         assert isinstance(rect, Rect) and isinstance(primary, bool)
+
+
+def test_a_mismatching_first_frame_asks_for_a_retry(qapp):
+    import threading
+
+    backend = WgcBackend.__new__(WgcBackend)
+    backend._lock = threading.Lock()
+    backend._cv = threading.Condition(backend._lock)
+    backend._latest = None
+    backend._rect = Rect(0, 0, 4, 3)
+    backend._wanted = True
+    backend._seq = 0
+    backend._monitor_rect = Rect(0, 0, 2560, 1440)
+    backend._retried_monitor = False
+    backend._retry_requested = False
+    backend.full_dark = False
+
+    backend._store_frame(FakeWgcFrame(np.zeros((1080, 1920, 4), dtype=np.uint8)))
+
+    assert backend._retry_requested is True
+    assert backend._retried_monitor is True

@@ -78,3 +78,15 @@ def test_nllb_falls_back_to_argos_without_transformers(monkeypatch):
     engine = app_module.build_engine(Config(engine="nllb"))
     assert engine.name == "argos"
     assert loaded == [True]
+
+
+def test_nllb_is_used_when_transformers_is_present(monkeypatch):
+    from ocrtrans import app as app_module
+    from ocrtrans.config import Config
+
+    class FakeNllb:
+        name = "nllb"
+
+    monkeypatch.setattr(app_module, "build_local", lambda name: FakeNllb())
+    engine = app_module.build_engine(Config(engine="nllb"))
+    assert engine.name == "nllb"

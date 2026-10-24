@@ -8,17 +8,15 @@ param(
     [switch]$DryRun
 )
 
-$ErrorActionPreference = "Stop"
 $requirementFile = if ($Cpu) { "requirements-cpu.txt" } else { "requirements.txt" }
 
-$python = "py"
 if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-    Write-Error "Python launcher 'py' not found. Install Python 3.13 from python.org or the Microsoft Store, then run this again."
+    Write-Host "ERROR: Python launcher 'py' not found. Install Python 3.13 from python.org or the Microsoft Store, then run this again."
     exit 1
 }
-$version = & py -3.13 --version 2>$null
+& py -3.13 --version *> $null
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Python 3.13 is required (this project targets 3.13). Install it, then run this again."
+    Write-Host "ERROR: Python 3.13 is required (this project targets 3.13). Install it, then run this again."
     exit 1
 }
 
@@ -38,9 +36,13 @@ foreach ($step in $steps) {
     Write-Host ">> $line"
     & $step[0] $step[1..($step.Length - 1)]
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "Command failed: $line"
+        Write-Host "ERROR: command failed: $line"
         exit $LASTEXITCODE
     }
+}
+
+if ($DryRun) {
+    exit 0
 }
 
 Write-Host ""

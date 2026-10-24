@@ -78,7 +78,7 @@ def local_engine(name: str):
     try:
         return build_local(name)
     except ImportError:
-        log.warning("%s needs transformers; using argos", name)
+        log.warning("%s needs transformers; using argos", name, exc_info=True)
         from .argos import ArgosEngine
 
         engine = ArgosEngine()
@@ -164,6 +164,7 @@ def main() -> int:
     state: dict = {
         "pipeline": None,
         "engine_name": None,
+        "engine_request": None,
         "running": False,
         "starting": False,
         "picking": False,
@@ -264,8 +265,9 @@ def main() -> int:
             pipeline.start()
             state["pipeline"] = pipeline
             state["engine_name"] = engine.name
+            state["engine_request"] = cfg.engine
         else:
-            if state["engine_name"] != cfg.engine:
+            if state["engine_request"] != cfg.engine:
                 # free the old model before the new one allocates VRAM
                 pipeline.set_enabled(False)
                 if not pipeline.unload_engine():
@@ -273,12 +275,14 @@ def main() -> int:
                     window.set_running(False)
                     return
                 state["engine_name"] = None
+                state["engine_request"] = None
                 engine = load_engine(cfg)
                 if engine is None:
                     window.set_running(False)
                     return
                 pipeline.adopt_engine(engine)
                 state["engine_name"] = engine.name
+                state["engine_request"] = cfg.engine
             pipeline.set_fps(cfg.capture_fps)
             pipeline.set_profile(cfg.stability_profile)
             rects = RegionSet.from_config(cfg, screen)

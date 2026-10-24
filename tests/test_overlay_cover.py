@@ -134,3 +134,11 @@ def test_a_block_below_caps_the_growth(qapp):
     assert overlay._layouts[0].cover.h > 24
     assert overlay._layouts[0].cover.bottom <= 142
     overlay.close()
+
+
+def test_damage_covers_the_grown_box(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), queue.Queue())
+    item = make_item(text="một hai ba bốn năm sáu bảy tám chín mười", rect=Rect(100, 100, 200, 24))
+    damage = overlay._damage([], [item])
+    assert damage.height() >= item.rect.h + overlay.GROW_PX
+    overlay.close()

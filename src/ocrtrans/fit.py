@@ -121,7 +121,7 @@ def fit_text(
     anchor = line_px if line_px > 0 else source.h * 0.8
     base_font = max(min_font_px, min(round(anchor * 0.8), source.h))
     width = max(1, min(source.w, screen.right - source.x))
-    bottom = source.bottom if limit_bottom is None else limit_bottom
+    bottom = source.bottom if limit_bottom is None else max(source.bottom, limit_bottom)
     max_h = max(1, bottom - source.y)
 
     def rect_for(height: int) -> Rect:

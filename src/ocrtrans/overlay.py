@@ -67,9 +67,6 @@ class OverlayWindow(QWidget):
         self.events_queue = events_queue
         self.dpr = max(1.0, float(self.devicePixelRatioF()))
         self.measure = QtMeasure(config.font_family, self.dpr)
-        # Two floor lines of vertical room: a longer Vietnamese line grows instead
-        # of losing its tail. Raise it only if 3-line captions start truncating.
-        self.GROW_PX = 2 * config.min_font_px + 8
         self.state = OverlayState()
         self._items: list[RenderItem] = []
         self._layouts: list[_Layout] = []
@@ -100,6 +97,12 @@ class OverlayWindow(QWidget):
         self._timer.start()
 
     # ---- public API -------------------------------------------------------
+
+    @property
+    def GROW_PX(self) -> int:
+        """Two floor lines of vertical room: a longer translation grows instead
+        of losing its tail. Raise it only if 3-line captions start truncating."""
+        return 2 * self.config.min_font_px + 8
 
     def show_items(self, items: list[RenderItem]) -> None:
         self._items = list(items)
@@ -228,7 +231,8 @@ class OverlayWindow(QWidget):
             for other in self._items:
                 if other is item:
                     continue
-                if item.rect.bottom <= other.rect.y <= limit:
+                overlaps_x = min(item.rect.right, other.rect.right) > max(item.rect.x, other.rect.x)
+                if overlaps_x and item.rect.y < other.rect.y <= limit:
                     # A cover growing into another block would flicker with it.
                     limit = min(limit, other.rect.y - 4)
             limits.append(limit)
