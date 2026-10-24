@@ -142,6 +142,29 @@ def test_appearance_change_is_applied_immediately(qapp):
     window.close()
 
 
+def test_the_debug_checkbox_is_off_by_default(qapp, monkeypatch):
+    monkeypatch.delenv("OCRTRANS_DEBUG", raising=False)
+    window = make_window(Config(regions=[ONE]))
+    assert window.debug.isChecked() is False
+    window.close()
+
+
+def test_the_debug_checkbox_sets_the_log_level(qapp):
+    import logging
+
+    root = logging.getLogger()
+    before = root.level
+    try:
+        window = make_window(Config(regions=[ONE]))
+        window.debug.setChecked(True)
+        assert root.level == logging.DEBUG
+        window.debug.setChecked(False)
+        assert root.level == logging.INFO
+        window.close()
+    finally:
+        root.setLevel(before)
+
+
 def test_the_window_hints_when_no_region_exists(qapp):
     window = make_window(Config(regions=[]))
     assert not window.region_hint.isHidden()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Callable
 
 from PyQt6.QtCore import Qt, QTimer
@@ -25,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from ..config import ENGINES, Config
 from ..geometry import Rect
+from ..logging_setup import set_debug
 from ..regions import NormalizedRegion, to_physical
 from . import theme
 
@@ -116,6 +118,9 @@ class ControlWindow(QWidget):
         self.status_label = QLabel("stopped")
         self.status_label.setObjectName("muted")
         self.status_label.setWordWrap(True)
+        self.debug = QCheckBox("Debug logging")
+        self.debug.setChecked(bool(os.environ.get("OCRTRANS_DEBUG")))
+        self.debug.toggled.connect(set_debug)
 
         title = QLabel("OCRTrans")
         title.setObjectName("title")
@@ -174,6 +179,7 @@ class ControlWindow(QWidget):
         layout.addWidget(overlay_box)
         layout.addWidget(engine_box)
         layout.addWidget(self.start_button)
+        layout.addWidget(self.debug)
         layout.addWidget(self.status_label)
 
         self.set_appearance(
