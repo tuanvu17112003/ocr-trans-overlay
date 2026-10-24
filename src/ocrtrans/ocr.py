@@ -49,6 +49,27 @@ def _trim_edge_noise(text: str) -> str:
 
 
 MIN_TEXT_DENSITY = 5e-5
+TERMINAL_PUNCTUATION = ".!?…:;"
+
+
+def _is_label_pair(label: str, text: str) -> bool:
+    """True when `label` is a speaker name and `text` is the dialogue under it.
+
+    Game captions put the speaker above the line: a short, mostly capitalised
+    line with no closing punctuation, followed by a line that starts with a
+    capital. A wrapped sentence never looks like that (its first line is long
+    and sentence-cased, or its second line starts lowercase). Measured against
+    the layouts in scripts/ocr_layout_samples.py, where geometry alone merged
+    the name into the dialogue in every case.
+    """
+    words = label.split()
+    if not words or len(words) > 6 or label.rstrip().endswith(tuple(TERMINAL_PUNCTUATION)):
+        return False
+    capitalised = sum(1 for word in words if word[:1].isupper())
+    if capitalised / len(words) < 0.6:
+        return False
+    first_letter = next((char for char in text if char.isalpha()), "")
+    return first_letter.isupper()
 
 
 def _looks_like_text(rect: Rect, text: str) -> bool:
@@ -111,6 +132,9 @@ def group_blocks(
                 same_style
                 and -0.2 * last.rect.h <= v_gap <= max_gap_ratio * last.rect.h
                 and same_column
+                # A speaker name is a label for the line under it, not a line of
+                # the same paragraph, even when it is typeset the same size.
+                and not _is_label_pair(last.text, box.text)
             )
             if same_row or vertical:
                 group.append(box)
