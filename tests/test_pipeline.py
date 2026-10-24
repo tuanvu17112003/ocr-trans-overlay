@@ -30,6 +30,11 @@ class FallbackCapture:
         return np.full((100, 200, 3), 30, np.uint8), Health.WGC_FALLBACK
 
 
+class BlackCapture:
+    def grab(self, rect):
+        return None, Health.BLACK
+
+
 class CountingCapture(FakeCapture):
     def __init__(self, frame):
         super().__init__(frame)
@@ -177,7 +182,7 @@ def test_slow_online_request_does_not_block_local_ocr():
     slow = SlowEngine(delay=3.0)
     p = pipeline_with(engine=slow)
     p.start()
-    time.sleep(0.3)
+    time.sleep(0.8)
     assert p.stats()["ocr_passes"] >= 2
     p.stop()
 
@@ -304,6 +309,50 @@ def test_empty_results_back_off_to_one_pass_per_second():
     passes = p.stats()["ocr_passes"]
     p.stop()
     assert 2 <= passes <= 5
+
+
+class SwitchCapture:
+    def __init__(self):
+        self.frame = np.full((100, 200, 3), 30, np.uint8)
+
+    def grab(self, rect):
+        return self.frame, Health.OK
+
+
+def test_capture_health_reaches_the_overlay_when_there_is_no_frame():
+    p = pipeline_with(capture=BlackCapture(), fps=60)
+    p.start()
+    ev = p.wait_event(
+        lambda e: e.kind is EventKind.CAPTURE_HEALTH and e.health is Health.BLACK
+    )
+    p.stop()
+    assert ev is not None, "a black capture never told the overlay to hold"
+
+
+def test_a_one_tick_change_wakes_the_empty_backoff():
+    cap = SwitchCapture()
+    p = pipeline_with(capture=cap, ocr=FakeOcr(boxes=[]), fps=60)
+    p.start()
+    try:
+        end = time.monotonic() + 6.0
+        while time.monotonic() < end and p.stats()["ocr_passes"] < 4:
+            time.sleep(0.02)
+        assert p.stats()["ocr_passes"] >= 4, "the empty screen never backed off"
+
+        before = p.stats()["ocr_passes"]
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and p.stats()["ocr_passes"] == before:
+            time.sleep(0.01)
+        after_pass = p.stats()["ocr_passes"]
+        time.sleep(0.05)  # the change must land after the floor and inside the backoff
+        cap.frame = np.full((100, 200, 3), 200, np.uint8)
+
+        end = time.monotonic() + 0.6
+        while time.monotonic() < end and p.stats()["ocr_passes"] == after_pass:
+            time.sleep(0.01)
+        assert p.stats()["ocr_passes"] > after_pass, "the wake never shortened the wait"
+    finally:
+        p.stop()
 
 
 def test_fallback_capture_still_runs_ocr():

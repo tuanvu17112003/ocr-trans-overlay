@@ -106,9 +106,8 @@ class OverlayState:
         self._last_scan_id = event.scan_id
         self._last_ocr_at = now
         if event.scan_interval_s or event.scan_ms:
-            self.watchdog_s = max(
-                1.5, event.scan_interval_s + event.scan_ms / 1000.0 + 0.35
-            )
+            gap = max(event.scan_interval_s, 1.5 * event.scan_ms / 1000.0)
+            self.watchdog_s = max(1.5, gap + event.scan_ms / 1000.0 + 0.35)
 
         present: set[int] = set()
         for view in event.blocks:

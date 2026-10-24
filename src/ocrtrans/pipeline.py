@@ -174,6 +174,7 @@ class Pipeline:
         self._scan_id = 0
         self._ocr_busy = threading.Event()
         self._wake_prev: np.ndarray | None = None
+        self._wake = False
         self._interval = MIN_INTERVAL_S
         self._last_ocr_end = clock() - 10.0
         self._last_ocr_ms = 0.0
@@ -214,6 +215,10 @@ class Pipeline:
         self._ocr_queue.clear()
         self._mt_queue.clear()
         self.memory.reset()
+        self._ocr_busy.clear()
+        self._wake_prev = None
+        self._wake = False
+        self._scan_times.clear()
         for thread in self._threads:
             thread.join(timeout)
         self._pool.shutdown(wait=False, cancel_futures=True)
@@ -226,6 +231,7 @@ class Pipeline:
         self.memory.reset()
         self._scan_id = 0
         self._wake_prev = None
+        self._wake = False
         self._empty_count = 0
         self._last_ocr_ms = 0.0
         self._interval = MIN_INTERVAL_S
@@ -336,10 +342,8 @@ class Pipeline:
             finally:
                 if gate is not None:
                     gate.release()
-            if frame is None:
-                self._sleep_rest(started)
-                continue
             if health is not Health.OK:
+                # hold/hide signals must reach the overlay even with no frame
                 self.emit(
                     PipelineEvent(
                         kind=EventKind.CAPTURE_HEALTH,
@@ -348,15 +352,22 @@ class Pipeline:
                         health=health,
                     )
                 )
+            if frame is None:
+                self._sleep_rest(started)
+                continue
 
             wake, self._wake_prev = frame_changed(self._wake_prev, frame)
-            interval = self.budget.interval(self._last_ocr_ms, self._empty_count, wake)
+            self._wake = self._wake or wake
+            interval = self.budget.interval(
+                self._last_ocr_ms, self._empty_count, self._wake
+            )
             self._interval = interval
             if self.clock() - self._last_ocr_end < interval:
                 self._sleep_rest(started)
                 continue
 
             self._scan_id += 1
+            self._wake = False  # the change is about to be scanned
             self._ocr_queue.put((self.epoch, self._scan_id, frame, self._region()))
             self._sleep_rest(started)
 
@@ -373,7 +384,7 @@ class Pipeline:
             self._ocr_busy.set()
             started = self.clock()
             try:
-                blocks = self._run_ocr(frame)
+                blocks = self._run_ocr(frame, epoch)
             except Exception:  # noqa: BLE001 - OCR failure must not kill the loop
                 self._ocr_errors += 1
                 if self._ocr_errors == 1 or self._ocr_errors % 100 == 0:
@@ -415,7 +426,7 @@ class Pipeline:
             for block in candidates[:12]:
                 self._submit_mt(block, epoch, origin)
 
-    def _run_ocr(self, frame: np.ndarray) -> list[TrackBlock]:
+    def _run_ocr(self, frame: np.ndarray, epoch: int) -> list[TrackBlock]:
         boxes = self.ocr.read(frame)
         tiled = False
         if not boxes and self._tile_allowed():
@@ -435,6 +446,8 @@ class Pipeline:
             for block in grouped
         ]
         ttl = self.budget.ttl(self._interval)
+        if epoch != self.epoch:
+            return []  # a reset while the pass was running; do not repopulate memory
         return self.memory.observe(boxes, self.clock(), ttl_s=ttl)
 
     def _tile_allowed(self) -> bool:

@@ -109,6 +109,23 @@ def test_watchdog_scales_with_a_slow_pass_cycle():
     assert s.tick(2.5) == []
 
 
+def test_watchdog_uses_the_gap_after_this_pass_not_the_one_before():
+    s = OverlayState()
+    s.on_event(
+        ev(
+            EventKind.OCR_RESULT,
+            scan_id=1,
+            scan_interval_s=0.25,   # the pass before this one was fast
+            scan_ms=852,            # but this one was slow
+            blocks=[block(1, "HELLO")],
+        ),
+        0.0,
+    )
+    s.on_event(ev(EventKind.TRANSLATION_RESULT, items=[item(1, "XIN CHÀO", "HELLO")]), 0.1)
+    assert s.tick(1.6) is None          # the next start is 1.28 s after this pass, not 0.25 s
+    assert s.tick(2.5) == []
+
+
 def test_stale_cover_does_not_return_after_a_capture_gap():
     s = OverlayState(watchdog_s=1.5)
     s.on_event(ev(EventKind.OCR_RESULT, scan_id=1, blocks=[block(1, "A")]), 0.0)

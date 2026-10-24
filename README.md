@@ -126,8 +126,8 @@ Run the harness yourself:
   largest font that still fits its box instead of accepting the first greedy wrap.
 - Detection runs with the long side capped at 1280 px and lower thresholds than the
   PaddleOCR defaults, which reads faint HUD text and roughly halves full-frame OCR time
-  on a synthetic 2560x1440 scene (353 -> 171 ms, CPU onnxruntime). A region wider than
-  1600 px gets one bounded tiled rescue pass (max 2x2 tiles, 64 px overlap, at most once
+  on a synthetic 2560x1440 scene (353 -> 171 ms, CPU onnxruntime). A region whose long side
+  exceeds 1600 px gets one bounded tiled rescue pass (max 2x2 tiles, 64 px overlap, at most once
   per 2 s) only when a single pass finds nothing.
 - Paragraphs are merged up to 6 lines; two labels on the same row stay separate blocks.
 - Scans are text-first: the full region is OCR'd at a fixed budget (one pass in flight,
