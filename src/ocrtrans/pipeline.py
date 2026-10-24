@@ -1,4 +1,4 @@
-﻿"""Capture -> OCR -> translate pipeline with epoch cancellation."""
+﻿"""Capture -> OCR -> translate pipeline: text-first scanning, bounded by a budget."""
 
 from __future__ import annotations
 
@@ -13,19 +13,20 @@ from typing import Callable, Literal, Protocol
 
 import numpy as np
 
+from .blocks import BlockMemory, BlockState, TrackBlock
 from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
 from .geometry import Box, Rect, union_all
 from .ocr import group_blocks
+from .scan import MIN_INTERVAL_S, ScanBudget, frame_changed
 from .stats import LatencyStats
-from .track import BlockState, Decision, TemporalTracker, TrackBlock
 from .translate import Engine, TranslationService
 
 log = logging.getLogger(__name__)
 
 
 def _offset(rect: Rect, origin: Rect) -> Rect:
-    """Region-relative tracker rect -> screen rect."""
+    """Region-relative block rect -> screen rect."""
     return Rect(rect.x + origin.x, rect.y + origin.y, rect.w, rect.h)
 
 
@@ -138,21 +139,24 @@ class Pipeline:
         self,
         capture: CaptureManager,
         ocr,
-        tracker: TemporalTracker,
         service: TranslationService,
         emit: Callable[[PipelineEvent], None],
+        *,
+        memory: BlockMemory | None = None,
+        budget: ScanBudget | None = None,
         gate: ExclusionGate | None = None,
         fps: int = 15,
         clock=time.monotonic,
     ) -> None:
         self.capture = capture
         self.ocr = ocr
-        self.tracker = tracker
         self.service = service
         self.emit = emit
         self.gate = gate
         self.fps = fps
         self.clock = clock
+        self.memory = memory or BlockMemory()
+        self.budget = budget or ScanBudget(fps)
 
         self.epoch = 0
         self.enabled = True
@@ -164,8 +168,14 @@ class Pipeline:
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="http")
         self._switch_lock = threading.Lock()
         self._last_mt: dict[int, tuple[str, int]] = {}
-        self._known_ids: set[int] = set()
+
         self._scan_id = 0
+        self._ocr_busy = threading.Event()
+        self._wake_prev: np.ndarray | None = None
+        self._interval = MIN_INTERVAL_S
+        self._last_ocr_end = clock() - 10.0
+        self._last_ocr_ms = 0.0
+        self._empty_count = 0
 
         self._ocr_passes = 0
         self._ocr_errors = 0
@@ -197,21 +207,35 @@ class Pipeline:
         self.epoch += 1
         self._ocr_queue.clear()
         self._mt_queue.clear()
-        self._known_ids.clear()
+        self.memory.reset()
         for thread in self._threads:
             thread.join(timeout)
         self._pool.shutdown(wait=False, cancel_futures=True)
 
-    def set_regions(self, rects: list[Rect]) -> None:
-        self._regions = list(rects)
+    def _new_epoch(self) -> None:
         self.epoch += 1
         self._ocr_queue.clear()
         self._mt_queue.clear()
         self._last_mt.clear()
-        self._known_ids.clear()
+        self.memory.reset()
         self._scan_id = 0
-        self.tracker.reset()
+        self._wake_prev = None
+        self._empty_count = 0
+        self._last_ocr_ms = 0.0
+        self._interval = MIN_INTERVAL_S
+        self._last_ocr_end = self.clock() - 10.0
+
+    def set_regions(self, rects: list[Rect]) -> None:
+        self._regions = list(rects)
+        self._new_epoch()
         self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
+
+    def set_fps(self, fps: int) -> None:
+        self.fps = fps
+        self.budget.set_fps(fps)
+
+    def set_profile(self, profile: str) -> None:
+        self.memory.set_profile(profile)
 
     def unload_engine(self, timeout: float = 5.0) -> bool:
         """Free the current model. Only valid while paused; False means busy."""
@@ -224,22 +248,12 @@ class Pipeline:
         """Install an already-loaded engine after unload_engine()."""
         with self._switch_lock:
             self.service.adopt(engine)
-        self.epoch += 1
-        self._ocr_queue.clear()
-        self._mt_queue.clear()
-        self._last_mt.clear()
-        self._known_ids.clear()
-        self._scan_id = 0
-        self.tracker.reset()
+        self._new_epoch()
         self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
-        self.epoch += 1
-        self._ocr_queue.clear()
-        self._mt_queue.clear()
-        self._known_ids.clear()
-        self._scan_id = 0
+        self._new_epoch()
         self.emit(
             PipelineEvent(
                 kind=EventKind.RESET,
@@ -265,7 +279,7 @@ class Pipeline:
             "p95": round(self._mt_stats.percentile(95), 1),
             "ocr_p50": round(self._ocr_stats.percentile(50), 1),
             "ocr_p95": round(self._ocr_stats.percentile(95), 1),
-            "ocr_saturated": self._ocr_queue.qsize() > 0,
+            "ocr_saturated": self._ocr_busy.is_set(),
             "mt_saturated": self._mt_queue.qsize() > 0,
         }
 
@@ -298,6 +312,9 @@ class Pipeline:
             if not self.enabled:
                 time.sleep(0.05)
                 continue
+            if self._ocr_busy.is_set():
+                time.sleep(0.016)  # never replace a pending frame
+                continue
             gate = self.gate
             if gate is not None and not gate.acquire():
                 self._exclusion_missed += 1
@@ -312,7 +329,6 @@ class Pipeline:
                 self._sleep_rest(started)
                 continue
             if health is not Health.OK:
-                self.tracker.reset()
                 self.emit(
                     PipelineEvent(
                         kind=EventKind.CAPTURE_HEALTH,
@@ -321,26 +337,16 @@ class Pipeline:
                         health=health,
                     )
                 )
+
+            wake, self._wake_prev = frame_changed(self._wake_prev, frame)
+            interval = self.budget.interval(self._last_ocr_ms, self._empty_count, wake)
+            self._interval = interval
+            if self.clock() - self._last_ocr_end < interval:
                 self._sleep_rest(started)
                 continue
 
-            decision = self.tracker.update(frame, self.clock())
             self._scan_id += 1
-            if decision.skip:
-                origin = self._region()
-                self.emit(
-                    PipelineEvent(
-                        kind=EventKind.OCR_RESULT,
-                        epoch=self.epoch,
-                        at=self.clock(),
-                        scan_id=self._scan_id,
-                        blocks=self._views(self.tracker.blocks(), origin),
-                    )
-                )
-            else:
-                self._ocr_queue.put(
-                    (self.epoch, self._scan_id, frame, decision, self._region())
-                )
+            self._ocr_queue.put((self.epoch, self._scan_id, frame, self._region()))
             self._sleep_rest(started)
 
     # ---- OCR --------------------------------------------------------------
@@ -350,30 +356,37 @@ class Pipeline:
             task = self._ocr_queue.take()
             if task is None:
                 continue
-            epoch, scan_id, frame, decision, origin = task
+            epoch, scan_id, frame, origin = task
             if epoch != self.epoch or not self.enabled:
                 continue
+            self._ocr_busy.set()
+            started = self.clock()
             try:
-                started = self.clock()
-                blocks, observed = self._run_ocr(frame, decision)
-                self._ocr_stats.add((self.clock() - started) * 1000, cached=False)
+                blocks = self._run_ocr(frame)
             except Exception:  # noqa: BLE001 - OCR failure must not kill the loop
                 self._ocr_errors += 1
                 if self._ocr_errors == 1 or self._ocr_errors % 100 == 0:
                     log.exception("OCR pass failed (%d so far)", self._ocr_errors)
                 continue
+            finally:
+                self._last_ocr_end = self.clock()
+                self._last_ocr_ms = (self._last_ocr_end - started) * 1000
+                self._ocr_busy.clear()
             if epoch != self.epoch:
                 continue
+            self._ocr_stats.add(self._last_ocr_ms, cached=False)
             self._ocr_passes += 1
-            snapshot = self.tracker.blocks()
-            self._last_blocks = len(snapshot)
+            self._last_blocks = len(blocks)
+            self._empty_count = 0 if blocks else self._empty_count + 1
             self.emit(
                 PipelineEvent(
                     kind=EventKind.OCR_RESULT,
                     epoch=epoch,
                     at=self.clock(),
                     scan_id=scan_id,
-                    blocks=self._views(snapshot, origin),
+                    blocks=self._views(blocks, origin),
+                    scan_interval_s=self._interval,
+                    scan_ms=self._last_ocr_ms,
                 )
             )
             candidates = [
@@ -387,30 +400,19 @@ class Pipeline:
             for block in candidates[:12]:
                 self._submit_mt(block, epoch, origin)
 
-    def _run_ocr(self, frame: np.ndarray, decision: Decision) -> tuple[list[TrackBlock], list[int]]:
-        if decision.full_detect:
-            known = set(self._known_ids)
-            boxes = self.ocr.read(frame)
-            grouped = group_blocks(boxes)
-            boxes = [
-                Box(
-                    rect=block.rect,
-                    text=block.text,
-                    confidence=min(line.confidence for line in block.lines),
-                    line_px=block.line_px,
-                )
-                for block in grouped
-            ]
-            blocks = self.tracker.observe(boxes, self.clock())
-            observed = sorted(known | {block.id for block in blocks})
-        else:
-            rects = [rect for _, rect in decision.crops]
-            boxes = self.ocr.read(frame, rects)
-            observed = [block_id for block_id, _ in decision.crops]
-            blocks = self.tracker.observe(boxes, self.clock(), scope=set(observed))
-        self._known_ids = set(observed)
-        seen = set(observed)
-        return [block for block in blocks if block.id in seen], observed
+    def _run_ocr(self, frame: np.ndarray) -> list[TrackBlock]:
+        grouped = group_blocks(self.ocr.read(frame))
+        boxes = [
+            Box(
+                rect=block.rect,
+                text=block.text,
+                confidence=min(line.confidence for line in block.lines),
+                line_px=block.line_px,
+            )
+            for block in grouped
+        ]
+        ttl = self.budget.ttl(self._interval)
+        return self.memory.observe(boxes, self.clock(), ttl_s=ttl)
 
     # ---- translation ------------------------------------------------------
 
@@ -518,7 +520,3 @@ class Pipeline:
                 ],
             )
         )
-
-
-
-

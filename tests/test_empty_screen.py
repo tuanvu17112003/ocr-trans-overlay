@@ -5,11 +5,12 @@ import time
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from ocrtrans.blocks import BlockMemory
 from ocrtrans.capture import Health
 from ocrtrans.geometry import Rect
 from ocrtrans.ocr import RapidOcrEngine
 from ocrtrans.pipeline import EventKind, Pipeline
-from ocrtrans.track import TemporalTracker
+from ocrtrans.scan import ScanBudget
 from ocrtrans.translate import TranslationCache, TranslationService
 
 
@@ -48,9 +49,10 @@ def test_empty_screen_does_not_spin_ocr_and_recovers_when_text_appears():
     p = Pipeline(
         cap,
         RapidOcrEngine(),
-        TemporalTracker("safe"),
         TranslationService(FakeEngine(), TranslationCache()),
         events.append,
+        memory=BlockMemory("safe"),
+        budget=ScanBudget(15),
         fps=15,
     )
     p.set_regions([Rect(0, 0, 800, 200)])

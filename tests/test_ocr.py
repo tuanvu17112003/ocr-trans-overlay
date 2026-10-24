@@ -85,34 +85,3 @@ def test_split_line_is_one_block():
     blocks = group_blocks(boxes)
     assert len(blocks) == 1
     assert blocks[0].text == "Open the gate"
-
-
-
-
-
-def test_crop_read_keeps_every_line_of_a_paragraph():
-    img = Image.new("RGB", (420, 140), (18, 18, 22))
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 24)
-    draw.text((10, 10), "first line of text", font=font, fill=(240, 240, 240))
-    draw.text((10, 50), "second line of text", font=font, fill=(240, 240, 240))
-    draw.text((10, 90), "third line of text", font=font, fill=(240, 240, 240))
-    frame = np.array(img)[:, :, ::-1].copy()
-
-    engine = RapidOcrEngine()
-    boxes = engine.read(frame, [Rect(0, 0, 420, 140)])
-    text = " ".join(b.text for b in boxes).lower()
-    assert "first" in text and "second" in text and "third" in text
-
-
-def test_crop_read_handles_a_small_single_line_crop():
-    img = Image.new("RGB", (320, 90), (18, 18, 22))
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 18)
-    draw.text((8, 28), "Rusty key x1", font=font, fill=(235, 235, 235))
-    frame = np.array(img)[:, :, ::-1].copy()
-
-    engine = RapidOcrEngine()
-    boxes = engine.read(frame, [Rect(0, 0, 320, 90)])
-    text = " ".join(b.text for b in boxes).lower()
-    assert "rusty" in text and "key" in text

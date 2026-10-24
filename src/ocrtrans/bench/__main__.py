@@ -10,7 +10,6 @@ from pathlib import Path
 
 from ..ocr import RapidOcrEngine
 from ..pipeline import Pipeline
-from ..track import TemporalTracker
 from ..translate import TranslationCache, TranslationService
 from .ocr_check import check_ocr, render_line
 from .perf import run_replay
@@ -59,7 +58,6 @@ def perf_rows(engines: dict, corpus: list[dict], workdir: Path) -> list[dict]:
         pipeline = Pipeline(
             None,  # replay calls ocr.read/service.translate directly
             RapidOcrEngine(),
-            TemporalTracker(),
             TranslationService(engine, TranslationCache()),
             lambda event: None,
         )

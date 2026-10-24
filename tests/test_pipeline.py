@@ -3,10 +3,11 @@ import time
 
 import numpy as np
 
+from ocrtrans.blocks import BlockMemory
 from ocrtrans.capture import Health
 from ocrtrans.geometry import Box, Rect
 from ocrtrans.pipeline import EventKind, Pipeline
-from ocrtrans.track import BlockState, Decision, TemporalTracker, TrackBlock
+from ocrtrans.scan import ScanBudget
 from ocrtrans.translate import TranslationCache, TranslationService
 
 
@@ -18,38 +19,58 @@ class FakeCapture:
         return self.frame, Health.OK
 
 
+class NoiseCapture:
+    def grab(self, rect):
+        rng = np.random.default_rng()
+        return rng.integers(0, 255, (100, 200, 3), dtype=np.uint8), Health.OK
+
+
+class FallbackCapture:
+    def grab(self, rect):
+        return np.full((100, 200, 3), 30, np.uint8), Health.WGC_FALLBACK
+
+
+class CountingCapture(FakeCapture):
+    def __init__(self, frame):
+        super().__init__(frame)
+        self.grabs = 0
+
+    def grab(self, rect):
+        self.grabs += 1
+        return super().grab(rect)
+
+
 class FakeOcr:
     def __init__(self, boxes=None):
-        self.boxes = boxes if boxes is not None else [Box(Rect(0, 0, 50, 12), "X", 0.9)]
+        self.boxes = boxes if boxes is not None else [Box(Rect(0, 0, 50, 12), "XXX", 0.9)]
 
-    def read(self, frame, rects=None):
+    def read(self, frame):
         return list(self.boxes)
 
 
-class FakeTracker:
-    def __init__(self, crop=False, skip=False):
-        self.crop = crop
-        self.skip = skip
-        self._blocks = []
+class BlockingOcr:
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
 
-    def update(self, frame, now):
-        if self.skip:
-            return Decision(skip=True)
-        if self.crop:
-            return Decision(crops=[(1, Rect(0, 0, 50, 12))])
-        return Decision(full_detect=True)
+    def read(self, frame):
+        self.started.set()
+        self.release.wait(5.0)
+        return [Box(Rect(0, 0, 50, 12), "XXX", 0.9)]
 
-    def observe(self, boxes, now, scope=None):
-        self._blocks = [] if not boxes else [
-            TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)
-        ]
-        return list(self._blocks)
 
-    def blocks(self):
-        return list(self._blocks)
+class SlowOcr:
+    def __init__(self, delay):
+        self.delay = delay
 
-    def reset(self):
-        self._blocks = []
+    def read(self, frame):
+        time.sleep(self.delay)
+        return [Box(Rect(0, 0, 50, 12), "XXX", 0.9)]
+
+
+class RaisingOcr:
+    def read(self, frame):
+        raise RuntimeError("ocr broke")
 
 
 class FastEngine:
@@ -66,6 +87,19 @@ class FastEngine:
 
     def translate(self, texts):
         return [self.prefix + t for t in texts]
+
+
+class EmptyEngine:
+    name, kind = "empty", "local"
+
+    def load(self):
+        pass
+
+    def unload(self):
+        pass
+
+    def translate(self, texts):
+        return ["" for _ in texts]
 
 
 class SlowEngine:
@@ -99,21 +133,20 @@ class SlowEngine:
 def pipeline_with(
     engine=None,
     ocr=None,
-    tracker=None,
-    tracker_returns_crop=False,
-    tracker_returns_skip=False,
+    capture=None,
     region=None,
+    fps=60,
+    memory=None,
 ):
     events = []
-    engine = engine or FastEngine()
     p = Pipeline(
-        capture=FakeCapture(np.full((100, 200, 3), 30, np.uint8)),
+        capture=capture or FakeCapture(np.full((100, 200, 3), 30, np.uint8)),
         ocr=ocr or FakeOcr(),
-        tracker=tracker
-        or FakeTracker(crop=tracker_returns_crop, skip=tracker_returns_skip),
-        service=TranslationService(engine, TranslationCache()),
+        service=TranslationService(engine or FastEngine(), TranslationCache()),
         emit=events.append,
-        fps=60,
+        memory=memory or BlockMemory("fast"),
+        budget=ScanBudget(fps),
+        fps=fps,
     )
     p.set_regions([region or Rect(0, 0, 200, 100)])
     p.events = lambda: events
@@ -133,7 +166,7 @@ def pipeline_with(
 
 def test_slow_online_request_does_not_block_local_ocr():
     slow = SlowEngine(delay=3.0)
-    p = pipeline_with(engine=slow, ocr=FakeOcr())
+    p = pipeline_with(engine=slow)
     p.start()
     time.sleep(0.3)
     assert p.stats()["ocr_passes"] >= 2
@@ -185,8 +218,7 @@ def test_pipeline_groups_stacked_lines_into_one_block():
             Box(Rect(10, 32, 180, 20), "traveler.", 0.9),
         ]
     )
-    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
-    p = pipeline_with(ocr=ocr, tracker=tracker)
+    p = pipeline_with(ocr=ocr)
     p.start()
     event = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
     assert len(event.blocks) == 1
@@ -195,21 +227,24 @@ def test_pipeline_groups_stacked_lines_into_one_block():
 
 
 def _far_boxes(count):
-    return [Box(Rect(10, 10 + index * 40, 100, 20), f"line {index}", 0.9) for index in range(count)]
+    return [
+        Box(Rect(10, 10 + index * 40, 100, 20), f"line {index}", 0.9)
+        for index in range(count)
+    ]
 
 
 def test_pipeline_emits_one_event_for_a_batch():
-    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
-    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(3)), tracker=tracker)
+    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(3)))
     p.start()
-    event = p.wait_event(lambda e: e.kind == EventKind.TRANSLATION_RESULT and len(e.items) == 3)
+    event = p.wait_event(
+        lambda e: e.kind == EventKind.TRANSLATION_RESULT and len(e.items) == 3
+    )
     assert event is not None
     p.stop()
 
 
 def test_cap_defers_blocks_instead_of_dropping_them():
-    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
-    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(20)), tracker=tracker)
+    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(20)))
     p.start()
     seen = set()
     deadline = time.monotonic() + 5.0
@@ -221,6 +256,83 @@ def test_cap_defers_blocks_instead_of_dropping_them():
     p.stop()
     assert len(seen) == 20
 
+
+def test_moving_background_does_not_increase_the_scan_rate():
+    p = pipeline_with(capture=NoiseCapture(), fps=60)
+    p.start()
+    time.sleep(1.2)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert 2 <= passes <= 6
+
+
+def test_capture_does_not_grab_while_ocr_is_running():
+    cap, ocr = CountingCapture(np.full((100, 200, 3), 30, np.uint8)), BlockingOcr()
+    p = pipeline_with(capture=cap, ocr=ocr, fps=60)
+    p.start()
+    assert ocr.started.wait(2.0)
+    time.sleep(0.05)  # let any in-flight grab land
+    grabs = cap.grabs
+    time.sleep(0.15)
+    assert cap.grabs == grabs
+    ocr.release.set()
+    p.stop()
+
+
+def test_scan_interval_respects_measured_ocr_time():
+    p = pipeline_with(ocr=SlowOcr(0.30), fps=60)
+    p.start()
+    time.sleep(1.4)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert passes <= 3
+
+
+def test_empty_results_back_off_to_one_pass_per_second():
+    p = pipeline_with(ocr=FakeOcr(boxes=[]), fps=60)
+    p.start()
+    time.sleep(2.2)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert 2 <= passes <= 5
+
+
+def test_fallback_capture_still_runs_ocr():
+    p = pipeline_with(
+        capture=FallbackCapture(),
+        ocr=FakeOcr(boxes=[Box(Rect(0, 0, 50, 12), "XXX", 0.9)]),
+        fps=60,
+    )
+    p.start()
+    ev = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
+    p.stop()
+    assert ev is not None and ev.blocks[0].source_text == "XXX"
+
+
+def test_scan_ids_increase_and_reset_with_the_epoch():
+    p = pipeline_with(fps=60)
+    p.start()
+    p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT)
+    first = [e.scan_id for e in p.events() if e.kind == EventKind.OCR_RESULT]
+    before = len(p.events())
+    p.set_regions([Rect(0, 0, 200, 100)])
+    time.sleep(0.6)
+    after = p.events()[before:]
+    p.stop()
+    assert first == sorted(set(first)) and first[0] == 1
+    assert any(e.kind is EventKind.RESET for e in after)
+    ids = [e.scan_id for e in after if e.kind == EventKind.OCR_RESULT]
+    assert ids and ids[0] == 1
+
+
+def test_empty_translation_keeps_the_block_hidden():
+    p = pipeline_with(engine=EmptyEngine(), fps=60)
+    p.start()
+    p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
+    time.sleep(0.3)
+    p.stop()
+    assert p.stats()["mt_errors"] == 0
+    assert not [e for e in p.events() if e.kind is EventKind.TRANSLATION_RESULT]
 
 
 class LifecycleEngine:
@@ -238,11 +350,6 @@ class LifecycleEngine:
 
     def translate(self, texts):
         return list(texts)
-
-
-class RaisingOcr:
-    def read(self, frame, rects=None):
-        raise RuntimeError("ocr broke")
 
 
 def test_adopt_engine_frees_the_old_model_without_reloading():

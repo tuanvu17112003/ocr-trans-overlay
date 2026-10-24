@@ -135,11 +135,12 @@ def test_translate_game_text(game_frame):
 
 def test_pipeline_against_game(game_window: GameWindow, game_frame):
     from ocrtrans.app import build_local
+    from ocrtrans.blocks import BlockMemory
     from ocrtrans.capture import CaptureManager, DxgiBackend
     from ocrtrans.geometry import Rect
     from ocrtrans.ocr import RapidOcrEngine
     from ocrtrans.pipeline import Pipeline
-    from ocrtrans.track import TemporalTracker
+    from ocrtrans.scan import ScanBudget
     from ocrtrans.translate import TranslationCache, TranslationService
 
     height, width = game_frame.shape[:2]
@@ -148,9 +149,10 @@ def test_pipeline_against_game(game_window: GameWindow, game_frame):
     pipeline = Pipeline(
         CaptureManager(backend),
         RapidOcrEngine(),
-        TemporalTracker("safe"),
         TranslationService(build_local("nllb"), TranslationCache()),
         events.put,
+        memory=BlockMemory("safe"),
+        budget=ScanBudget(10),
         fps=10,
     )
     pipeline.set_regions([Rect(0, 0, width, height)])

@@ -12,6 +12,7 @@ import requests
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QApplication
 
+from .blocks import BlockMemory
 from .capture import CaptureManager, DxgiBackend, WgcBackend
 from .config import Config, load_config, save_config
 from .exclusion import AffinityGate
@@ -24,7 +25,7 @@ from .online import DeepLEngine, GeminiEngine, GoogleEngine, MyMemoryEngine, Onl
 from .overlay import OverlayWindow
 from .pipeline import Pipeline
 from .regions import RegionSet, from_physical
-from .track import TemporalTracker
+from .scan import ScanBudget
 from .translate import Envit5Engine, NllbEngine, TranslationCache, TranslationService
 from .ui.control import ControlWindow
 from .ui.picker import pick_regions
@@ -157,9 +158,10 @@ def main() -> int:
             pipeline = Pipeline(
                 capture,
                 RapidOcrEngine(),
-                TemporalTracker(cfg.stability_profile),
                 TranslationService(engine, TranslationCache()),
                 events.put,
+                memory=BlockMemory(cfg.stability_profile),
+                budget=ScanBudget(cfg.capture_fps),
                 gate=AffinityGate(),
                 fps=cfg.capture_fps,
             )
@@ -184,8 +186,8 @@ def main() -> int:
                     return
                 pipeline.adopt_engine(engine)
                 state["engine_name"] = engine.name
-            pipeline.fps = cfg.capture_fps
-            pipeline.tracker.set_profile(cfg.stability_profile)
+            pipeline.set_fps(cfg.capture_fps)
+            pipeline.set_profile(cfg.stability_profile)
             rects = RegionSet.from_config(cfg, screen)
             pipeline.set_regions(rects)
             overlay.set_regions(rects)
@@ -223,8 +225,8 @@ def main() -> int:
         save_config(new_cfg)
         pipeline = state["pipeline"]
         if pipeline is not None:
-            pipeline.fps = new_cfg.capture_fps
-            pipeline.tracker.set_profile(new_cfg.stability_profile)
+            pipeline.set_fps(new_cfg.capture_fps)
+            pipeline.set_profile(new_cfg.stability_profile)
 
     def cycle_mode() -> None:
         cfg.region_mode = MODES[(MODES.index(cfg.region_mode) + 1) % len(MODES)]

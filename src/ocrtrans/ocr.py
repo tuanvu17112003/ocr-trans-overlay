@@ -116,11 +116,9 @@ class RapidOcrEngine:
         if self._engine is None:
             self.load()
 
-    def read(self, frame: np.ndarray, rects: list[Rect] | None = None) -> list[Box]:
+    def read(self, frame: np.ndarray) -> list[Box]:
         self._ensure_loaded()
         assert self._engine is not None
-        if rects is not None:
-            return self._read_crops(frame, rects)
 
         scale = 1.0
         img = frame
@@ -133,35 +131,6 @@ class RapidOcrEngine:
             )
         out = self._engine(img, use_det=True, use_cls=False, use_rec=True)
         return self._to_boxes(out, scale)
-
-    def _read_crops(self, frame: np.ndarray, rects: list[Rect]) -> list[Box]:
-        assert self._engine is not None
-        boxes: list[Box] = []
-        for rect in rects:
-            crop = frame[rect.y : rect.bottom, rect.x : rect.right]
-            if crop.size == 0:
-                continue
-            # detect inside the crop: a paragraph block is several text lines and the
-            # recognition model only understands one line at a time
-            out = self._engine(crop, use_det=True, use_cls=False, use_rec=True)
-            lines = self._to_boxes(out, 1.0)
-            text = ""
-            score = 0.0
-            if lines:
-                lines.sort(key=lambda line: (line.rect.y, line.rect.x))
-                text = " ".join(line.text for line in lines).strip()
-                score = min(line.confidence for line in lines)
-            else:
-                # detection fails on very small crops; fall back to line recognition
-                out = self._engine(crop, use_det=False, use_cls=False, use_rec=True)
-                texts = list(out.txts) if getattr(out, "txts", None) else []
-                scores = list(out.scores) if getattr(out, "scores", None) else []
-                text = " ".join(texts).strip()
-                score = max(scores) if scores else 1.0
-            if not text:
-                continue
-            boxes.append(Box(rect=rect, text=text, confidence=score))
-        return boxes
 
     @staticmethod
     def _to_boxes(out, scale: float) -> list[Box]:
