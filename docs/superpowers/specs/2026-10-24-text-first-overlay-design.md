@@ -199,10 +199,14 @@ class BlockMemory:
   pinning a stale cover for seconds). A block absent from that list is expired
   and the overlay removes it. One false-negative pass at ~3 passes/s keeps the
   cover ~0.6 s instead of strobing it.
+- Ghost guard: an unmatched block is dropped immediately (ignoring its TTL) when
+  its rect overlaps a matched block with IoU >= 0.1. A paragraph that moved or
+  was re-read with new text must not leave the old cover at the old rect.
 
 ### 4.5 ScanBudget
 
-One owner: `ScanBudget.interval(fps, last_ocr_ms, empty_count, wake) -> float`.
+One owner: `ScanBudget(fps).interval(last_ocr_ms, empty_count, wake) -> float`
+(the configured fps is fixed at construction; `Pipeline.set_fps` updates it).
 Tests call it and assert its return value; they never re-derive the formula, so
 code and test cannot drift apart.
 
@@ -255,8 +259,8 @@ breaks a row fails the suite.
 
 | event | action |
 |---|---|
-| `RESET` | clear everything, `suppressed=False`, return `[]` |
-| `OCR_RESULT` | ignore when `event.scan_id <= last_scan_id` (stale completion). Otherwise, per view: create/update. If the normalised source differs from the stored source by **any** character, set `translated=""`, `translated_for=""`. Apply rect/line_px/last_seen. Remove stored ids absent from the snapshot. Then `last_scan_id = event.scan_id`, and if `suppressed` and `scan_id > suppressed_at_scan`, set `suppressed=False`. |
+| `RESET` | clear blocks, `last_scan_id = 0`, `suppressed=False`, `suppressed_at_scan = 0`, `last_ocr_at = None`, return `[]` |
+| `OCR_RESULT` | ignore when `event.scan_id <= last_scan_id` (return the current render unchanged, never `[]`). Otherwise, per view: create/update. If the normalised source differs from the stored source by **any** character, set `translated=""`, `translated_for=""`. Apply rect/line_px/last_seen. Remove stored ids absent from the snapshot (count them in `hidden_stale`). Then `last_scan_id = event.scan_id`, and if `suppressed` and `scan_id > suppressed_at_scan`, set `suppressed=False`. |
 | `TRANSLATION_RESULT` | apply only when `normalise(item.source) == stored.source` exactly; set `translated`, `translated_for = item.source` |
 | `CAPTURE_HEALTH` | `WGC_FALLBACK` is a working frame: ignore. `RECREATING`, `BLACK`, `BLOCKED`: keep painting up to 1 s, then `suppressed=True`, `suppressed_at_scan = last_scan_id`. Health OK does **not** unsuppress. |
 | no OCR event >= 1.5 s | `suppressed=True`, `suppressed_at_scan = last_scan_id` (watchdog on the drain timer) |
@@ -284,9 +288,11 @@ result can only satisfy the exact text it was requested for.
 
 - keep: `ocr_passes`, `ocr_errors`, `mt_errors`, `blocks`, `p50`, `p95`,
   `ocr_p50`, `ocr_p95`, `inflight`.
-- add: `scan_rate` (passes in the last 5 s), `rendered` (items painted),
-  `hidden_stale` (blocks removed because they left the snapshot), `tiled`
-  (passes that used tiling), `last_scan_ms`.
+- add: `scan_rate` (passes in the last 5 s), `rendered` (items painted, from
+  `OverlayWindow.shown`), `hidden_stale` (blocks removed because they left the
+  snapshot, counted by `OverlayState`), `tiled` (passes that used tiling),
+  `last_scan_ms`. `Pipeline.stats()` supplies the scan metrics; `app.status()`
+  merges `rendered`/`hidden_stale` from the overlay.
 - `ocr_queue` becomes a boolean "pending frame" (depth 1) — keep the key.
 
 Status line: `OCR 190 pass (3.1/s) · text 2 · shown 2 · err 0/0 · p50 171 ms`.
@@ -326,6 +332,9 @@ Unit:
   the text, health OK, then assert nothing paints until the snapshot with the
   new `scan_id` arrives (the stale-A-after-gap case).
 - `test_block_memory_keeps_identity_across_passes` and drops after TTL.
+- `test_a_moved_block_with_new_text_does_not_ghost_at_the_old_rect`.
+- `test_reset_accepts_the_first_snapshot_of_the_new_epoch` (the overlay must
+  reset `last_scan_id`; otherwise every snapshot of the new epoch is dropped).
 - `test_block_memory_requires_exact_text_for_stability` — a one-character
   wobble never becomes STABLE and never reuses the old translation.
 - `test_block_memory_stability_uses_time_not_passes` (150/300 ms profiles).
@@ -431,7 +440,7 @@ low-VRAM machine, and it reuses `_OnlineBase`-like HTTP or a thin local class.
 5. Suppression is lifted only by a snapshot with `scan_id > suppressed_at_scan`,
    never by health alone: a stale cover cannot return after a capture gap.
 6. One OCR pass in flight; the next pass may start only after
-   `ScanBudget.interval(fps, last_ocr_ms, empty_count, wake)` has elapsed since
+   `ScanBudget(fps).interval(last_ocr_ms, empty_count, wake)` has elapsed since
    the previous pass **ended**; a wake cancels the empty-screen backoff and
    never goes below `1.5 * last_ocr_ms`.
 7. Empty-screen backoff is driven by scan results, with a cheap pixel wake

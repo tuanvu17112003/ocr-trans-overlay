@@ -110,6 +110,13 @@ def test_block_survives_one_empty_pass_within_ttl():
     assert m.observe([], 0.51, 0.5) == []
 
 
+def test_a_moved_block_with_new_text_does_not_ghost_at_the_old_rect():
+    m = BlockMemory("fast")
+    m.observe([box("AAAA", x=0, w=100)], 0.0, 1.0)
+    blocks = m.observe([box("BBBB", x=60, w=100)], 0.1, 1.0)
+    assert [(b.rect.x, b.text) for b in blocks] == [(60, "BBBB")]
+
+
 def test_match_score_prefers_overlap_and_containment():
     a = Rect(0, 0, 100, 20)
     assert match_score(a, Rect(0, 0, 100, 20)) == 1.0
@@ -131,6 +138,7 @@ Copy `match_score` and `_norm` from `track.py` unchanged (`_norm` = `" ".join(te
 - If equal: keep the existing `text`, and set `state = STABLE` when `now - first_seen >= STABILITY_WINDOWS_S[profile]` (unknown profile -> safe).
 - Always set `last_seen = now`, `rect = box.rect`, and `line_px = box.line_px or keep`.
 - Drop unmatched blocks older than `ttl_s`; return the rest ordered by `id`.
+- Also drop an unmatched block when its rect overlaps a **matched** block with IoU `>= 0.1`, even inside its TTL: a paragraph that moved or was re-read with new text must not ghost at the old rect (a stale cover on screen is the anti-goal).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -207,7 +215,7 @@ Expected: `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement `src/ocrtrans/scan.py`**
 
-`interval` is exactly the spec 4.5 pseudocode (`base = max(1/fps, MIN_INTERVAL_S, OCR_HEADROOM*last_ocr_ms/1000)`, empty backoff only when `not wake`). `ttl` is `min(max(2*interval, TTL_MIN_S), TTL_MAX_S)`. `frame_changed` reproduces the old `_gray` step: grayscale if needed, resize to 320 px wide, `GaussianBlur(5,5)`, `absdiff > diff_luma`, `mean() > threshold`; return `(changed, gray)` and treat `prev is None` as unchanged.
+`interval` is exactly the spec 4.5 pseudocode (`base = max(1/fps, MIN_INTERVAL_S, OCR_HEADROOM*last_ocr_ms/1000)`, empty backoff only when `not wake`). `ttl` is `min(max(2*interval, TTL_MIN_S), TTL_MAX_S)`. `frame_changed` reproduces the old `_gray` step: grayscale if needed, resize to 320 px wide, `GaussianBlur(5,5)`, `absdiff > diff_luma`, then `changed = float(diff.mean()) > threshold` (a Python `bool`, not `np.bool_`); return `(changed, gray)` and treat `prev is None` as unchanged. The spec's `interval(fps, ...)` argument moves to `ScanBudget.__init__` so `Pipeline.set_fps` can reach it; spec 4.5 and 10.6 are updated to match.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -234,7 +242,7 @@ git commit -m "feat: add scan budget with a pinned interval table"
 
 **Interfaces:**
 - Consumes: `blocks` is not used here; `capture.Health`; `pipeline.PipelineEvent`.
-- Produces: `PipelineEvent.scan_id: int = 0`; `EventKind` without `SKIP`; `OverlayState(unhealthy_hold_s=1.0, watchdog_s=1.5)` with `on_event(event, now) -> list[RenderItem]`, `tick(now) -> list[RenderItem] | None` (`None` = unchanged), `state(block_id) -> str` (`hidden` | `pending` | `shown`), `clear()`.
+- Produces: `PipelineEvent.scan_id: int = 0`; `EventKind` without `SKIP`; `OverlayState(unhealthy_hold_s=1.0, watchdog_s=1.5)` with `on_event(event, now) -> list[RenderItem]`, `tick(now) -> list[RenderItem] | None` (`None` = unchanged), `state(block_id) -> str` (`hidden` | `pending` | `shown`), `hidden_stale: int`, `clear()`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -339,6 +347,25 @@ def test_reset_clears_and_older_epoch_is_ignored():
     assert out == []
 
 
+def test_reset_accepts_the_first_snapshot_of_the_new_epoch():
+    s = OverlayState()
+    for scan in range(1, 5):
+        s.on_event(ev(EventKind.OCR_RESULT, scan_id=scan, blocks=[block(1, "HELLO")]), 0.1 * scan)
+    s.on_event(ev(EventKind.RESET, epoch=2), 0.5)
+    s.on_event(ev(EventKind.OCR_RESULT, epoch=2, scan_id=1, blocks=[block(1, "HELLO")]), 0.6)
+    out = s.on_event(
+        ev(EventKind.TRANSLATION_RESULT, epoch=2, scan_id=1, items=[item(1, "XIN CHÀO", "HELLO")]),
+        0.7,
+    )
+    assert [i.text for i in out] == ["XIN CHÀO"]
+
+
+def test_a_removed_block_is_counted_as_hidden_stale():
+    s = shown_state()
+    s.on_event(ev(EventKind.OCR_RESULT, scan_id=2, blocks=[]), 0.2)
+    assert s.hidden_stale == 1
+
+
 def test_pending_block_is_not_rendered():
     s = OverlayState()
     out = s.on_event(ev(EventKind.OCR_RESULT, blocks=[block(1, "HEL", state="pending")]), 0.0)
@@ -354,9 +381,9 @@ Expected: failures on `scan_id` (unexpected keyword) and on the new behavior.
 
 - [ ] **Step 3: Implement**
 
-`pipeline.py`: add `scan_id: int = 0` to `PipelineEvent`; remove `observed_block_ids`; remove `SKIP` from `EventKind`; add `self._scan_id = 0`, reset it in `set_regions`/`adopt_engine`/`set_enabled`; increment before emitting `OCR_RESULT` and pass `scan_id=...`; replace the `if decision.skip: emit(SKIP)` branch with "do not queue the frame".
+`pipeline.py`: add `scan_id: int = 0` to `PipelineEvent`; remove `observed_block_ids`; remove `SKIP` from `EventKind`; add `self._scan_id = 0`, reset it in `set_regions`/`adopt_engine`/`set_enabled`. **Bridge until Task 4:** on every capture tick emit `OCR_RESULT` with `scan_id` incremented and the tracker's complete live list (`self.tracker.blocks()`, converted to views) — both after a pass and on `decision.skip`. The new overlay removes blocks by absence, so the old crop-scoped `seen` list and the SKIP event cannot survive this task; Task 4 deletes the bridge with the tracker.
 
-`lifecycle.py`: exact-text rule (normalise with casefold + whitespace collapse); on `OCR_RESULT` ignore `scan_id <= last_scan_id`, update/create blocks, clear `translated` when the source text differs, remove ids missing from the snapshot, update `last_scan_id`/`last_ocr_at`, then lift suppression only when `scan_id > suppressed_at_scan`; on `TRANSLATION_RESULT` apply only when the normalised source matches; on `CAPTURE_HEALTH` treat `OK`/`None`/`WGC_FALLBACK` as no hold, otherwise suppress after `unhealthy_hold_s`; `tick` suppresses when `now - last_ocr_at >= watchdog_s` and returns `None` when nothing changed. **Evaluate the watchdog at the end of `on_event`** (after the event has been applied) and at the start of `tick`, so a snapshot that arrives after a gap first refreshes `last_ocr_at`. `_render` paints only when `translated` is non-empty and `translated_for` matches `source`.
+`lifecycle.py`: exact-text rule (normalise with casefold + whitespace collapse); on `OCR_RESULT` ignore `scan_id <= last_scan_id` by returning `self._render(now)` unchanged (no state mutation, never `[]`), update/create blocks, clear `translated` when the source text differs, remove ids missing from the snapshot (increment `self.hidden_stale` per removed block), update `last_scan_id`/`last_ocr_at`, then lift suppression only when `scan_id > suppressed_at_scan`; on `TRANSLATION_RESULT` apply only when the normalised source matches; on `CAPTURE_HEALTH` treat `OK`/`None`/`WGC_FALLBACK` as no hold, otherwise suppress after `unhealthy_hold_s`; `tick` suppresses when `now - last_ocr_at >= watchdog_s` and returns `None` when nothing changed. **Evaluate the watchdog at the end of `on_event`** (after the event has been applied) and at the start of `tick`, so a snapshot that arrives after a gap first refreshes `last_ocr_at`. On `RESET`: clear blocks, `last_scan_id = 0`, `suppressed = False`, `suppressed_at_scan = 0`, `last_ocr_at = None`, `hidden_stale = 0`. `_render` paints only when `translated` is non-empty and `translated_for` matches `source`.
 
 `overlay.py`: in `_drain`, after draining the queue, call `items = self.state.tick(now)`; if not `None`, assign and repaint. Add `@property def shown(self) -> int: return len(self._items)`.
 
@@ -382,6 +409,7 @@ git commit -m "feat: exact-text overlay state with scan ordering and render supp
 - Delete: `src/ocrtrans/track.py`, `tests/test_track.py`
 - Rewrite: `tests/test_pipeline.py` (fakes and the tests that depended on the tracker)
 - Modify: `tests/test_e2e_smoke.py`, `tests/test_empty_screen.py`, `tests/real/test_game.py`
+- Modify: `src/ocrtrans/bench/__main__.py` (drop the `TemporalTracker` import and the positional tracker argument)
 
 **Interfaces:**
 - Consumes: `blocks.BlockMemory`, `scan.ScanBudget`, `scan.frame_changed`, `ocr.group_blocks`.
@@ -433,7 +461,11 @@ def test_empty_results_back_off_to_one_pass_per_second():
 
 
 def test_fallback_capture_still_runs_ocr():
-    p = pipeline_with(capture=FallbackCapture(), fps=60)
+    p = pipeline_with(
+        capture=FallbackCapture(),
+        ocr=FakeOcr(boxes=[Box(Rect(0, 0, 50, 12), "XXX", 0.9)]),
+        fps=60,
+    )
     p.start()
     ev = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
     p.stop()
@@ -478,7 +510,7 @@ Capture thread, per iteration: if `not enabled` sleep 0.05; if `self._ocr_busy.i
 
 OCR thread: `busy.set()`, time the pass, call `ocr.read(frame)`, `group_blocks`, convert to `Box`, `blocks = memory.observe(boxes, now, ttl_s=budget.ttl(self._interval))`; on exception count and rate-limit the log; in `finally` record `last_ocr_end`/`last_ocr_ms` and `busy.clear()`; then emit the complete snapshot with `scan_id`, set `empty_count = 0 if blocks else empty_count + 1`, and submit MT exactly as today.
 
-Delete `track.py` and `tests/test_track.py`; remove the `Decision`/crop path in `_run_ocr`. Delete `RapidOcrEngine._read_crops` and the `rects` argument of `ocr.read` (update `tests/test_ocr.py` and the fake OCRs). Update the other call sites to the new constructor (`TemporalTracker(...)` argument removed) and `app.py` to `Pipeline(capture, RapidOcrEngine(), TranslationService(...), events.put, memory=BlockMemory(cfg.stability_profile), budget=ScanBudget(cfg.capture_fps), gate=AffinityGate(), fps=cfg.capture_fps)`, `pipeline.set_profile(...)`, `pipeline.set_fps(...)`.
+Delete `track.py` and `tests/test_track.py`; remove the `Decision`/crop path in `_run_ocr` **and the Task 3 complete-snapshot bridge** (snapshots now come from the OCR pass only). Delete `RapidOcrEngine._read_crops` and the `rects` argument of `ocr.read` (update `tests/test_ocr.py` and the fake OCRs). Update the other call sites to the new constructor (`TemporalTracker(...)` argument removed, including `src/ocrtrans/bench/__main__.py`) and `app.py` to `Pipeline(capture, RapidOcrEngine(), TranslationService(...), events.put, memory=BlockMemory(cfg.stability_profile), budget=ScanBudget(cfg.capture_fps), gate=AffinityGate(), fps=cfg.capture_fps)`, `pipeline.set_profile(...)`, `pipeline.set_fps(...)`.
 
 - [ ] **Step 4: Run the full suite**
 
@@ -532,7 +564,7 @@ Expected: `ImportError` for `plan_tiles`.
 
 - [ ] **Step 3: Implement**
 
-`plan_tiles`: `cols = max(1, min(max_tiles, ceil(width / max_side)))`, same for rows; tile size `ceil(width/cols)` x `ceil(height/rows)`; extend each tile by `overlap` on its right/bottom (clamped) so seams are covered; return region-local rects.
+`plan_tiles`: `cols = max(1, min(max_tiles, ceil(width / max_side)))`, same for rows; tile size `ceil(width/cols)` x `ceil(height/rows)`; extend each tile by `overlap` on its right/bottom (clamped) so seams are covered; return region-local rects **row-major (`for row: for col`)**, so the first tile is the top-left.
 
 `Pipeline._read_tiled(frame)`: crop each tile, `ocr.read(crop)`, offset every box rect by the tile origin, then `merge_boxes`, then `group_blocks` as usual. In the OCR pass, if the single pass found no boxes, the region's long side is > 1600, `now - last_tiled_at >= tile_cooldown_s`, and the previous pass was not tiled, run the tiled read instead; increment `self._tiled`, set `last_tiled_at`.
 
@@ -560,7 +592,7 @@ git commit -m "feat: bounded tiled rescue for large regions"
 - Test: `tests/test_pipeline.py`
 
 **Interfaces:**
-- Produces: stats keys `scan_rate` (float, passes/second over the last 5 s), `tiled` (int), `last_scan_ms` (float), `shown` (int, from `OverlayWindow.shown`).
+- Produces: stats keys `scan_rate` (float, passes/second over the last 5 s), `tiled` (int), `last_scan_ms` (float), and `app.status` keys `rendered` (int, `OverlayWindow.shown`) and `hidden_stale` (int, removals counted by `OverlayState`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -584,10 +616,10 @@ Expected: `KeyError: 'scan_rate'`.
 
 - [ ] **Step 3: Implement**
 
-`Pipeline`: keep a `collections.deque` of pass timestamps; `scan_rate = len(window) / 5.0` after trimming to the last 5 s; `last_scan_ms = self._last_ocr_ms`; `tiled = self._tiled`. `app.status` adds `"shown": overlay.shown`. `ui/control.set_status` second line becomes
-`OCR {passes} pass ({rate:.1f}/s)   text {blocks}   shown {shown}{error_text}   tiled {tiled}` and the third line keeps MT queue plus `p50/p95`, appending `scan {last_scan_ms:.0f} ms`.
+`Pipeline`: keep a `collections.deque` of pass timestamps; `scan_rate = len(window) / 5.0` after trimming to the last 5 s; `last_scan_ms = self._last_ocr_ms`; `tiled = self._tiled`. `app.status` adds `"rendered": overlay.shown` and `"hidden_stale": overlay.state.hidden_stale`. `ui/control.set_status` second line becomes
+`OCR {passes} pass ({rate:.1f}/s)   text {blocks}   shown {rendered}{error_text}   tiled {tiled}` and the third line keeps MT queue plus `p50/p95`, appending `scan {last_scan_ms:.0f} ms` and `hidden {hidden_stale}`.
 
-`README.md`: replace the "how it schedules" description with the text-first loop (one pass in flight, budget table, TTL, exact text), update the metrics table header with `scan/s` and `last_scan`, and note that motion no longer triggers extra OCR work.
+`README.md`: replace the "how it schedules" description with the text-first loop (one pass in flight, budget table, TTL, exact text), update the metrics table header with `scan/s`, `hidden`, and `last_scan`, and note that motion no longer triggers extra OCR work.
 
 - [ ] **Step 4: Run the suite**
 
@@ -616,14 +648,16 @@ git commit -m "feat: report scan rate and stale-hide stats"
 Synthetic frames: a 900x200 canvas filled with a random noise background regenerated on every grab (moving video), plus a fixed subtitle drawn with `C:/Windows/Fonts/segoeui.ttf` at 34 px. Drive `Pipeline` with `RapidOcrEngine()` on CPU and a fake engine returning `"VI " + text`. Feed every event into one `OverlayState` and record rendered items.
 
 Assertions:
-1. Within 6 s the subtitle "Open the gate, traveler." is rendered (`OverlayState` returns an item containing that source).
-2. Then switch the subtitle text to "The gate is locked."; within 6 s an item for the new text is rendered.
-3. After the switch, no rendered item ever contains the old translation (feed events in order, after each event check the item's `source_text`).
+1. Within 6 s the subtitle "Open the gate, traveler." is rendered (`OverlayState` returns an item containing that source), and its `block_id` is recorded.
+2. Then replace the subtitle with "The gate is locked." drawn at the **same left edge, baseline and font size**, and grab again; within 6 s an item for the new text is rendered.
+3. From the first rendered item that contains the new text onward, no rendered item may carry the old `source_text` **or the old `block_id`**. (Before that first new item the old cover is allowed to remain: that is the deliberate scan-interval gap, and the new text is visible next to it.)
 
 ```python
 def test_moving_background_subtitle_translates_and_never_shows_the_old_text():
     ...
-    assert old_source_seen_after_change is False
+    # after the first item whose source contains "locked":
+    assert old_block_id not in {item.block_id for item in items}
+    assert all("traveler" not in item.source_text.lower() for item in items)
 ```
 
 - [ ] **Step 2: Run it**

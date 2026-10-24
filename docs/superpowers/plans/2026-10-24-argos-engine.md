@@ -70,7 +70,7 @@ def fake_argos(monkeypatch):
     package_mod.get_available_packages = lambda: list(packages)
     package_mod.update_package_index = lambda: None
     translation_mod = types.ModuleType("argostranslate.translate")
-    translation_mod.get_translation_from_codes = lambda f, t: translation
+    translation_mod.get_translation_from_codes = lambda f, t: translation if installed else None
     root = types.ModuleType("argostranslate")
     root.package = package_mod
     root.translate = translation_mod
@@ -110,7 +110,7 @@ Expected: `ModuleNotFoundError: ocrtrans.argos`.
 
 - [ ] **Step 3: Implement `src/ocrtrans/argos.py`**
 
-`load()` imports inside the method, raises `RuntimeError("argostranslate is not installed; run: pip install argostranslate")` on `ImportError`, and if no `en->vi` translation object is available: `update_package_index()`, pick `from_code=="en" and to_code=="vi"` from `get_available_packages()`, `install()` it once (skip when already installed), then cache `get_translation_from_codes(from_code, to_code)`. `translate` maps the cached object over the list. `unload()` drops the reference.
+`load()` imports inside the method, raises `RuntimeError("argostranslate is not installed; run: pip install argostranslate")` on `ImportError`. Then: `tr = translation.get_translation_from_codes(from_code, to_code)`; if it is `None`, call `update_package_index()`, pick `from_code=="en" and to_code=="vi"` from `get_available_packages()`, call `install()` once, and **re-read** `get_translation_from_codes` (the installed model only appears after install). If it is still `None`, raise `RuntimeError("Argos en->vi model is not available")`. Cache `tr` and mark installation done so a second `load()` does not install again. `translate` maps the cached object over the list. `unload()` drops the reference.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -132,31 +132,47 @@ git commit -m "feat: optional offline Argos en-vi engine"
 - Modify: `src/ocrtrans/config.py:10` (`ENGINES`)
 - Modify: `src/ocrtrans/app.py:58-75` (`build_engine`)
 - Modify: `README.md` (engine tables)
-- Test: `tests/test_config.py` (create if absent)
+- Modify: `tests/test_config.py` (append; do not replace the existing roundtrip/rejection tests)
 
 **Interfaces:**
 - Consumes: `argos.ArgosEngine` from Task 1.
 - Produces: `"argos"` accepted by `Config`; `build_engine` returns a loaded `ArgosEngine` for `engine="argos"`.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
+
+Append to the existing `tests/test_config.py`:
 
 ```python
-# tests/test_config.py
 from ocrtrans.config import Config, _validate
 
 
 def test_argos_is_a_valid_engine():
     _validate(Config(engine="argos"))
+
+
+def test_build_engine_returns_argos_before_the_consent_gate(monkeypatch):
+    from ocrtrans import app as app_module
+
+    class FakeArgos:
+        def __init__(self):
+            self.loaded = False
+
+        def load(self):
+            self.loaded = True
+
+    monkeypatch.setattr("ocrtrans.argos.ArgosEngine", FakeArgos)
+    engine = app_module.build_engine(Config(engine="argos", online_consent=False))
+    assert isinstance(engine, FakeArgos) and engine.loaded
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 2: Run them to verify they fail**
 
 Run: `.venv/Scripts/python -m pytest tests/test_config.py -q`
-Expected: `ValueError: engine: 'argos' ...`.
+Expected: `ValueError: engine: 'argos' ...`, then `build_engine` falls back to NLLB (or `AttributeError` before the config change).
 
 - [ ] **Step 3: Implement**
 
-Add `"argos"` to `ENGINES`. In `build_engine`, before the online branch:
+Add `"argos"` to `ENGINES`. In `build_engine`, insert the branch **immediately after the `if cfg.engine in LOCAL_REPOS:` block and before the `if not cfg.online_consent:` guard** (otherwise the consent guard silently returns NLLB):
 
 ```python
 if cfg.engine == "argos":
