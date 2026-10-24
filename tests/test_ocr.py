@@ -3,7 +3,7 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from ocrtrans.geometry import Box, Rect
-from ocrtrans.ocr import RapidOcrEngine, group_blocks
+from ocrtrans.ocr import RapidOcrEngine, group_blocks, merge_boxes, plan_tiles
 
 
 def test_lines_of_one_paragraph_group_in_reading_order():
@@ -87,32 +87,17 @@ def test_split_line_is_one_block():
     assert blocks[0].text == "Open the gate"
 
 
+def test_plan_tiles_covers_a_2560x1440_region_in_at_most_four_tiles():
+    tiles = plan_tiles(2560, 1440)
+    assert 1 < len(tiles) <= 4
+    assert all(t.w <= 1344 and t.h <= 1344 for t in tiles)
+    assert tiles[0].x == 0 and tiles[0].y == 0
+    assert max(t.right for t in tiles) == 2560
+    assert max(t.bottom for t in tiles) == 1440
 
 
-
-def test_crop_read_keeps_every_line_of_a_paragraph():
-    img = Image.new("RGB", (420, 140), (18, 18, 22))
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 24)
-    draw.text((10, 10), "first line of text", font=font, fill=(240, 240, 240))
-    draw.text((10, 50), "second line of text", font=font, fill=(240, 240, 240))
-    draw.text((10, 90), "third line of text", font=font, fill=(240, 240, 240))
-    frame = np.array(img)[:, :, ::-1].copy()
-
-    engine = RapidOcrEngine()
-    boxes = engine.read(frame, [Rect(0, 0, 420, 140)])
-    text = " ".join(b.text for b in boxes).lower()
-    assert "first" in text and "second" in text and "third" in text
-
-
-def test_crop_read_handles_a_small_single_line_crop():
-    img = Image.new("RGB", (320, 90), (18, 18, 22))
-    draw = ImageDraw.Draw(img)
-    font = ImageFont.truetype("C:/Windows/Fonts/segoeui.ttf", 18)
-    draw.text((8, 28), "Rusty key x1", font=font, fill=(235, 235, 235))
-    frame = np.array(img)[:, :, ::-1].copy()
-
-    engine = RapidOcrEngine()
-    boxes = engine.read(frame, [Rect(0, 0, 320, 90)])
-    text = " ".join(b.text for b in boxes).lower()
-    assert "rusty" in text and "key" in text
+def test_merge_boxes_keeps_the_higher_confidence_duplicate():
+    a = Box(Rect(0, 0, 100, 20), "HELLO", 0.7)
+    b = Box(Rect(2, 1, 100, 20), "HELLO", 0.9)
+    merged = merge_boxes([a, b])
+    assert len(merged) == 1 and merged[0].confidence == 0.9

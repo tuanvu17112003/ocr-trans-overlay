@@ -7,7 +7,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-ENGINES = frozenset({"nllb", "envit5", "google", "gemini", "deepl", "mymemory"})
+ENGINES = frozenset({"nllb", "envit5", "argos", "google", "gemini", "deepl", "mymemory"})
 STABILITY_PROFILES = frozenset({"safe", "fast"})
 REGION_MODES = frozenset({"single", "multi", "monitor"})
 

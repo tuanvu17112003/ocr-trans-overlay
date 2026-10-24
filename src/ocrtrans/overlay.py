@@ -118,6 +118,10 @@ class OverlayWindow(QWidget):
         self._recompute()
         self.update()
 
+    @property
+    def shown(self) -> int:
+        return len(self._items)
+
     def clear(self) -> None:
         self._items = []
         self._layouts = []
@@ -135,12 +139,17 @@ class OverlayWindow(QWidget):
 
     def _drain(self) -> None:
         changed = False
+        now = time.monotonic()
         while True:
             try:
                 event: PipelineEvent = self.events_queue.get_nowait()
             except queue.Empty:
                 break
-            self._items = self.state.on_event(event, time.monotonic())
+            self._items = self.state.on_event(event, now)
+            changed = True
+        ticked = self.state.tick(now)
+        if ticked is not None:
+            self._items = ticked
             changed = True
         if changed:
             self._recompute()

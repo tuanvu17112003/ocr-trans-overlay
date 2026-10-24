@@ -3,10 +3,11 @@ import time
 
 import numpy as np
 
+from ocrtrans.blocks import BlockMemory
 from ocrtrans.capture import Health
 from ocrtrans.geometry import Box, Rect
 from ocrtrans.pipeline import EventKind, Pipeline
-from ocrtrans.track import BlockState, Decision, TemporalTracker, TrackBlock
+from ocrtrans.scan import ScanBudget
 from ocrtrans.translate import TranslationCache, TranslationService
 
 
@@ -18,36 +19,72 @@ class FakeCapture:
         return self.frame, Health.OK
 
 
+class NoiseCapture:
+    def grab(self, rect):
+        rng = np.random.default_rng()
+        return rng.integers(0, 255, (100, 200, 3), dtype=np.uint8), Health.OK
+
+
+class FallbackCapture:
+    def grab(self, rect):
+        return np.full((100, 200, 3), 30, np.uint8), Health.WGC_FALLBACK
+
+
+class BlackCapture:
+    def grab(self, rect):
+        return None, Health.BLACK
+
+
+class CountingCapture(FakeCapture):
+    def __init__(self, frame):
+        super().__init__(frame)
+        self.grabs = 0
+
+    def grab(self, rect):
+        self.grabs += 1
+        return super().grab(rect)
+
+
 class FakeOcr:
     def __init__(self, boxes=None):
-        self.boxes = boxes if boxes is not None else [Box(Rect(0, 0, 50, 12), "X", 0.9)]
+        self.boxes = boxes if boxes is not None else [Box(Rect(0, 0, 50, 12), "XXX", 0.9)]
 
-    def read(self, frame, rects=None):
+    def read(self, frame):
         return list(self.boxes)
 
 
-class FakeTracker:
-    def __init__(self, crop=False, skip=False):
-        self.crop = crop
-        self.skip = skip
+class BlockingOcr:
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
 
-    def update(self, frame, now):
-        if self.skip:
-            return Decision(skip=True)
-        if self.crop:
-            return Decision(crops=[(1, Rect(0, 0, 50, 12))])
-        return Decision(full_detect=True)
+    def read(self, frame):
+        self.started.set()
+        self.release.wait(5.0)
+        return [Box(Rect(0, 0, 50, 12), "XXX", 0.9)]
 
-    def observe(self, boxes, now, scope=None):
-        if not boxes:
+
+class SlowOcr:
+    def __init__(self, delay):
+        self.delay = delay
+
+    def read(self, frame):
+        time.sleep(self.delay)
+        return [Box(Rect(0, 0, 50, 12), "XXX", 0.9)]
+
+
+class RaisingOcr:
+    def read(self, frame):
+        raise RuntimeError("ocr broke")
+
+
+class WidthOcr:
+    """Simulates a wide region whose small text is lost at the 1280 cap."""
+
+    def read(self, frame):
+        if frame.shape[1] >= 2560:
             return []
-        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)]
-
-    def blocks(self):
-        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)]
-
-    def reset(self):
-        pass
+        return [Box(Rect(10, 10, 300, 40), "tile text", 0.9)]
 
 
 class FastEngine:
@@ -64,6 +101,19 @@ class FastEngine:
 
     def translate(self, texts):
         return [self.prefix + t for t in texts]
+
+
+class EmptyEngine:
+    name, kind = "empty", "local"
+
+    def load(self):
+        pass
+
+    def unload(self):
+        pass
+
+    def translate(self, texts):
+        return ["" for _ in texts]
 
 
 class SlowEngine:
@@ -97,21 +147,20 @@ class SlowEngine:
 def pipeline_with(
     engine=None,
     ocr=None,
-    tracker=None,
-    tracker_returns_crop=False,
-    tracker_returns_skip=False,
+    capture=None,
     region=None,
+    fps=60,
+    memory=None,
 ):
     events = []
-    engine = engine or FastEngine()
     p = Pipeline(
-        capture=FakeCapture(np.full((100, 200, 3), 30, np.uint8)),
+        capture=capture or FakeCapture(np.full((100, 200, 3), 30, np.uint8)),
         ocr=ocr or FakeOcr(),
-        tracker=tracker
-        or FakeTracker(crop=tracker_returns_crop, skip=tracker_returns_skip),
-        service=TranslationService(engine, TranslationCache()),
+        service=TranslationService(engine or FastEngine(), TranslationCache()),
         emit=events.append,
-        fps=60,
+        memory=memory or BlockMemory("fast"),
+        budget=ScanBudget(fps),
+        fps=fps,
     )
     p.set_regions([region or Rect(0, 0, 200, 100)])
     p.events = lambda: events
@@ -131,9 +180,9 @@ def pipeline_with(
 
 def test_slow_online_request_does_not_block_local_ocr():
     slow = SlowEngine(delay=3.0)
-    p = pipeline_with(engine=slow, ocr=FakeOcr())
+    p = pipeline_with(engine=slow)
     p.start()
-    time.sleep(0.3)
+    time.sleep(0.8)
     assert p.stats()["ocr_passes"] >= 2
     p.stop()
 
@@ -149,21 +198,6 @@ def test_engine_switch_refuses_while_a_translation_is_running():
     slow.release.set()
     assert slow.finished.wait(2.0), "old worker never finished"
     assert p.unload_engine(timeout=2.0) is True
-    p.stop()
-
-
-def test_crop_scan_reports_only_observed_ids():
-    p = pipeline_with(ocr=FakeOcr(boxes=[Box(Rect(0, 0, 50, 12), "X", 0.9)]), tracker_returns_crop=True)
-    p.start()
-    ev = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.observed_block_ids)
-    assert ev.observed_block_ids == [ev.blocks[0].block_id]
-    p.stop()
-
-
-def test_skip_is_reported_as_skip_not_empty_ocr():
-    p = pipeline_with(tracker_returns_skip=True)
-    p.start()
-    assert p.wait_event(lambda e: e.kind == EventKind.SKIP) is not None
     p.stop()
 
 
@@ -198,8 +232,7 @@ def test_pipeline_groups_stacked_lines_into_one_block():
             Box(Rect(10, 32, 180, 20), "traveler.", 0.9),
         ]
     )
-    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
-    p = pipeline_with(ocr=ocr, tracker=tracker)
+    p = pipeline_with(ocr=ocr)
     p.start()
     event = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
     assert len(event.blocks) == 1
@@ -208,21 +241,24 @@ def test_pipeline_groups_stacked_lines_into_one_block():
 
 
 def _far_boxes(count):
-    return [Box(Rect(10, 10 + index * 40, 100, 20), f"line {index}", 0.9) for index in range(count)]
+    return [
+        Box(Rect(10, 10 + index * 40, 100, 20), f"line {index}", 0.9)
+        for index in range(count)
+    ]
 
 
 def test_pipeline_emits_one_event_for_a_batch():
-    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
-    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(3)), tracker=tracker)
+    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(3)))
     p.start()
-    event = p.wait_event(lambda e: e.kind == EventKind.TRANSLATION_RESULT and len(e.items) == 3)
+    event = p.wait_event(
+        lambda e: e.kind == EventKind.TRANSLATION_RESULT and len(e.items) == 3
+    )
     assert event is not None
     p.stop()
 
 
 def test_cap_defers_blocks_instead_of_dropping_them():
-    tracker = TemporalTracker(profile="fast", blind_cap_s=0.2, refresh_s=0.2)
-    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(20)), tracker=tracker)
+    p = pipeline_with(ocr=FakeOcr(boxes=_far_boxes(20)))
     p.start()
     seen = set()
     deadline = time.monotonic() + 5.0
@@ -234,6 +270,144 @@ def test_cap_defers_blocks_instead_of_dropping_them():
     p.stop()
     assert len(seen) == 20
 
+
+def test_moving_background_does_not_increase_the_scan_rate():
+    p = pipeline_with(capture=NoiseCapture(), fps=60)
+    p.start()
+    time.sleep(1.2)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert 2 <= passes <= 6
+
+
+def test_capture_does_not_grab_while_ocr_is_running():
+    cap, ocr = CountingCapture(np.full((100, 200, 3), 30, np.uint8)), BlockingOcr()
+    p = pipeline_with(capture=cap, ocr=ocr, fps=60)
+    p.start()
+    assert ocr.started.wait(2.0)
+    time.sleep(0.05)  # let any in-flight grab land
+    grabs = cap.grabs
+    time.sleep(0.15)
+    assert cap.grabs == grabs
+    ocr.release.set()
+    p.stop()
+
+
+def test_scan_interval_respects_measured_ocr_time():
+    p = pipeline_with(ocr=SlowOcr(0.30), fps=60)
+    p.start()
+    time.sleep(1.4)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert passes <= 3
+
+
+def test_empty_results_back_off_to_one_pass_per_second():
+    p = pipeline_with(ocr=FakeOcr(boxes=[]), fps=60)
+    p.start()
+    time.sleep(2.2)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert 2 <= passes <= 5
+
+
+class SwitchCapture:
+    def __init__(self):
+        self.frame = np.full((100, 200, 3), 30, np.uint8)
+
+    def grab(self, rect):
+        return self.frame, Health.OK
+
+
+def test_capture_health_reaches_the_overlay_when_there_is_no_frame():
+    p = pipeline_with(capture=BlackCapture(), fps=60)
+    p.start()
+    ev = p.wait_event(
+        lambda e: e.kind is EventKind.CAPTURE_HEALTH and e.health is Health.BLACK
+    )
+    p.stop()
+    assert ev is not None, "a black capture never told the overlay to hold"
+
+
+def test_a_one_tick_change_wakes_the_empty_backoff():
+    cap = SwitchCapture()
+    p = pipeline_with(capture=cap, ocr=FakeOcr(boxes=[]), fps=60)
+    p.start()
+    try:
+        end = time.monotonic() + 6.0
+        while time.monotonic() < end and p.stats()["ocr_passes"] < 4:
+            time.sleep(0.02)
+        assert p.stats()["ocr_passes"] >= 4, "the empty screen never backed off"
+
+        before = p.stats()["ocr_passes"]
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and p.stats()["ocr_passes"] == before:
+            time.sleep(0.01)
+        after_pass = p.stats()["ocr_passes"]
+        time.sleep(0.05)  # the change must land after the floor and inside the backoff
+        cap.frame = np.full((100, 200, 3), 200, np.uint8)
+
+        end = time.monotonic() + 0.6
+        while time.monotonic() < end and p.stats()["ocr_passes"] == after_pass:
+            time.sleep(0.01)
+        assert p.stats()["ocr_passes"] > after_pass, "the wake never shortened the wait"
+    finally:
+        p.stop()
+
+
+def test_fallback_capture_still_runs_ocr():
+    p = pipeline_with(
+        capture=FallbackCapture(),
+        ocr=FakeOcr(boxes=[Box(Rect(0, 0, 50, 12), "XXX", 0.9)]),
+        fps=60,
+    )
+    p.start()
+    ev = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
+    p.stop()
+    assert ev is not None and ev.blocks[0].source_text == "XXX"
+
+
+def test_tiled_rescue_finds_text_a_single_pass_missed():
+    p = pipeline_with(
+        capture=FakeCapture(np.zeros((1440, 2560, 3), np.uint8)),
+        ocr=WidthOcr(),
+        region=Rect(0, 0, 2560, 1440),
+        fps=60,
+    )
+    p.start()
+    ev = p.wait_event(
+        lambda e: e.kind == EventKind.OCR_RESULT
+        and any(b.source_text == "tile text" for b in e.blocks),
+        timeout=4.0,
+    )
+    p.stop()
+    assert ev is not None
+
+
+def test_scan_ids_increase_and_reset_with_the_epoch():
+    p = pipeline_with(fps=60)
+    p.start()
+    p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT)
+    first = [e.scan_id for e in p.events() if e.kind == EventKind.OCR_RESULT]
+    before = len(p.events())
+    p.set_regions([Rect(0, 0, 200, 100)])
+    time.sleep(0.6)
+    after = p.events()[before:]
+    p.stop()
+    assert first == sorted(set(first)) and first[0] == 1
+    assert any(e.kind is EventKind.RESET for e in after)
+    ids = [e.scan_id for e in after if e.kind == EventKind.OCR_RESULT]
+    assert ids and ids[0] == 1
+
+
+def test_empty_translation_keeps_the_block_hidden():
+    p = pipeline_with(engine=EmptyEngine(), fps=60)
+    p.start()
+    p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
+    time.sleep(0.3)
+    p.stop()
+    assert p.stats()["mt_errors"] == 0
+    assert not [e for e in p.events() if e.kind is EventKind.TRANSLATION_RESULT]
 
 
 class LifecycleEngine:
@@ -251,11 +425,6 @@ class LifecycleEngine:
 
     def translate(self, texts):
         return list(texts)
-
-
-class RaisingOcr:
-    def read(self, frame, rects=None):
-        raise RuntimeError("ocr broke")
 
 
 def test_adopt_engine_frees_the_old_model_without_reloading():
@@ -290,6 +459,18 @@ def test_stats_report_how_many_blocks_the_last_pass_found():
     assert p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.blocks)
     assert p.stats()["blocks"] == 1
     p.stop()
+
+
+def test_stats_report_scan_rate_and_last_pass_duration():
+    p = pipeline_with(fps=60)
+    p.start()
+    assert p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT)
+    time.sleep(0.3)
+    stats = p.stats()
+    p.stop()
+    assert stats["scan_rate"] > 0
+    assert stats["last_scan_ms"] > 0
+    assert "tiled" in stats
 
 
 class BadEngine:

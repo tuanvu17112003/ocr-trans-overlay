@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 import cv2
 
-from .geometry import Box, Rect, union_all
+from .geometry import Box, Rect, iou, union_all
 
 
 @dataclass
@@ -116,11 +117,9 @@ class RapidOcrEngine:
         if self._engine is None:
             self.load()
 
-    def read(self, frame: np.ndarray, rects: list[Rect] | None = None) -> list[Box]:
+    def read(self, frame: np.ndarray) -> list[Box]:
         self._ensure_loaded()
         assert self._engine is not None
-        if rects is not None:
-            return self._read_crops(frame, rects)
 
         scale = 1.0
         img = frame
@@ -133,35 +132,6 @@ class RapidOcrEngine:
             )
         out = self._engine(img, use_det=True, use_cls=False, use_rec=True)
         return self._to_boxes(out, scale)
-
-    def _read_crops(self, frame: np.ndarray, rects: list[Rect]) -> list[Box]:
-        assert self._engine is not None
-        boxes: list[Box] = []
-        for rect in rects:
-            crop = frame[rect.y : rect.bottom, rect.x : rect.right]
-            if crop.size == 0:
-                continue
-            # detect inside the crop: a paragraph block is several text lines and the
-            # recognition model only understands one line at a time
-            out = self._engine(crop, use_det=True, use_cls=False, use_rec=True)
-            lines = self._to_boxes(out, 1.0)
-            text = ""
-            score = 0.0
-            if lines:
-                lines.sort(key=lambda line: (line.rect.y, line.rect.x))
-                text = " ".join(line.text for line in lines).strip()
-                score = min(line.confidence for line in lines)
-            else:
-                # detection fails on very small crops; fall back to line recognition
-                out = self._engine(crop, use_det=False, use_cls=False, use_rec=True)
-                texts = list(out.txts) if getattr(out, "txts", None) else []
-                scores = list(out.scores) if getattr(out, "scores", None) else []
-                text = " ".join(texts).strip()
-                score = max(scores) if scores else 1.0
-            if not text:
-                continue
-            boxes.append(Box(rect=rect, text=text, confidence=score))
-        return boxes
 
     @staticmethod
     def _to_boxes(out, scale: float) -> list[Box]:
@@ -186,3 +156,39 @@ class RapidOcrEngine:
 
     def close(self) -> None:
         self._engine = None
+
+
+def plan_tiles(
+    width: int,
+    height: int,
+    max_side: int = 1280,
+    overlap: int = 64,
+    max_tiles: int = 2,
+) -> list[Rect]:
+    """Region-local tiles for the bounded rescue scan, row-major."""
+    cols = max(1, min(max_tiles, math.ceil(width / max_side)))
+    rows = max(1, min(max_tiles, math.ceil(height / max_side)))
+    tile_w = math.ceil(width / cols)
+    tile_h = math.ceil(height / rows)
+    tiles: list[Rect] = []
+    for row in range(rows):
+        for col in range(cols):
+            x, y = col * tile_w, row * tile_h
+            tiles.append(
+                Rect(x, y, min(width - x, tile_w + overlap), min(height - y, tile_h + overlap))
+            )
+    return tiles
+
+
+def merge_boxes(boxes: list[Box], threshold: float = 0.5) -> list[Box]:
+    """Drop duplicates produced by the tile overlap, keeping the better score."""
+    kept: list[Box] = []
+    for box in boxes:
+        for index, existing in enumerate(kept):
+            if iou(existing.rect, box.rect) >= threshold:
+                if box.confidence > existing.confidence:
+                    kept[index] = box
+                break
+        else:
+            kept.append(box)
+    return kept

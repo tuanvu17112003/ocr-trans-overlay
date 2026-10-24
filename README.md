@@ -28,8 +28,12 @@ Downloaded once into the Hugging Face cache on first start:
 |---|---|---|
 | `nllb` (default) | `facebook/nllb-200-distilled-600M` | ~2.4 GB |
 | `envit5` | `VietAI/envit5-translation` | ~1.0 GB |
+| `argos` (optional) | Argos en->vi package, downloaded on first use | ~100 MB |
 
 OCR models ship inside the `rapidocr` wheel (PP-OCRv6 det/rec small).
+
+`argos` needs the optional package: `.venv\Scripts\python -m pip install argostranslate`.
+It runs on CPU and installs its language pack on first start.
 
 ## Run
 
@@ -39,7 +43,8 @@ run.bat
 
 or `.venv\Scripts\python -m ocrtrans.app`. The control window opens with every setting:
 engine, keys, stability profile, fps, region mode and picker, minimum font, plus
-Start/Stop and live status (engine, capture health, OCR passes, queues, p50/p95).
+Start/Stop and live status (engine, capture health, OCR passes and scan rate, shown/tiled,
+p50/p95).
 Nothing is downloaded or captured until Start. Closing the window quits.
 
 ## Hotkeys
@@ -62,6 +67,7 @@ Settings and regions are stored in `%LOCALAPPDATA%\OCRTrans\config.json`; logs i
 |---|---|---|---|
 | NLLB-600M | local | unlimited | ~1.25 GB VRAM, best default |
 | EnViT5 | local | unlimited | ~0.64 GB VRAM, fastest local |
+| Argos | local | unlimited | CPU only, small model, optional install |
 | Google (unofficial) | online | unofficial, can throttle/block | no key, may break without notice |
 | Gemini | online | free API quota (per-project, changes over time) | needs API key |
 | DeepL Free | online | 500k chars/month, 1 request/s | needs API key |
@@ -120,19 +126,27 @@ Run the harness yourself:
   largest font that still fits its box instead of accepting the first greedy wrap.
 - Detection runs with the long side capped at 1280 px and lower thresholds than the
   PaddleOCR defaults, which reads faint HUD text and roughly halves full-frame OCR time
-  on a synthetic 2560x1440 scene (353 -> 171 ms, CPU onnxruntime). Re-reads of a known
-  block detect inside the crop, so a multi-line paragraph is not squashed into one
-  recognition line.
+  on a synthetic 2560x1440 scene (353 -> 171 ms, CPU onnxruntime). A region whose long side
+  exceeds 1600 px gets one bounded tiled rescue pass (max 2x2 tiles, 64 px overlap, at most once
+  per 2 s) only when a single pass finds nothing.
 - Paragraphs are merged up to 6 lines; two labels on the same row stay separate blocks.
-- A screen with no text is re-scanned about once per stability window instead of every
-  frame, so an empty region does not spin the CPU or flood the log. The status line
-  shows `text N` (blocks found in the last pass) and `err N` (failed OCR passes).
+- Scans are text-first: the full region is OCR'd at a fixed budget (one pass in flight,
+  the next start is measured from the end of the previous pass and never faster than
+  1.5x the last pass time), so background motion, video or a moving camera costs nothing.
+  A screen with no text backs off to one pass per second until a cheap 320 px luma diff
+  says something changed. The status line shows `text N`, `shown N`, `tiled N`, `scan N ms`
+  and `hidden N`.
+- Exact text decides validity: a one-character change ("100 HP" -> "10 HP") hides the
+  block at once, and a translation can only paint over the text it was requested for.
+  A block that is no longer in the snapshot disappears; the 0.4-1.0 s TTL keep exists so
+  one false-negative pass does not strobe the cover.
 - Changing the engine while stopped frees the old model before the new one loads, so
   only one model sits in VRAM. Stop alone keeps the model loaded for a fast restart.
 - NLLB-600M still mistranslates short game labels out of context. Paragraph grouping
   helps; it is not a substitute for a glossary or a stronger model.
-- The overlay only paints blocks that stay stable for 2-3 OCR passes, so a typewriter
-  dialogue appears on the first stable pass, not while it is still animating.
+- The overlay only paints a block once its exact text has been read for the stability
+  window (fast 150 ms, safe 300 ms), so a typewriter dialogue appears after it settles,
+  not while it is still animating.
 
 ## Tests
 
