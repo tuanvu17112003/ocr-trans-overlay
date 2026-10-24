@@ -23,6 +23,12 @@ class QuietArgos(logging.Filter):
         )
 
 
+def set_debug(enabled: bool) -> None:
+    """Verbose logs only while the user asks for them."""
+    logging.getLogger().setLevel(logging.DEBUG if enabled else logging.INFO)
+    logging.getLogger("argostranslate").setLevel(logging.WARNING)
+
+
 def setup_logging(level: int = logging.INFO) -> None:
     base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "OCRTrans"
     base.mkdir(parents=True, exist_ok=True)

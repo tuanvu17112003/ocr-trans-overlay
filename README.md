@@ -71,7 +71,7 @@ Debug switches (environment variables):
 
 | Variable | Effect |
 |---|---|
-| `OCRTRANS_DEBUG=1` | verbose log: every scan (`ms`, blocks), OCR text per block, every translation (`ms`, chars, input/output), slow grabs |
+| `OCRTRANS_DEBUG=1` | debug logging from the first second, same as ticking `Debug logging` in the window |
 | `OCRTRANS_NO_OVERLAY=1` | run capture/OCR/MT without showing the overlay (A/B the overlay) |
 | `OCRTRANS_DXGI=1` | force Desktop Duplication instead of the default Windows Graphics Capture (A/B the capture path) |
 

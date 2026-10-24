@@ -98,8 +98,20 @@ def group_blocks(
                 abs(box.rect.y - last.rect.y) <= 0.2 * line_h
                 and -0.4 * line_h <= h_gap <= 0.4 * line_h
             )
-            same_column = abs(box.rect.x - group[0].rect.x) <= 2 * line_h
-            vertical = -0.2 * line_h <= v_gap <= max_gap_ratio * line_h and same_column
+            first = group[0]
+            # Centred captions indent the second line by more than two line
+            # heights; what identifies one paragraph is horizontal overlap.
+            overlap = min(first.rect.right, box.rect.right) - max(first.rect.x, box.rect.x)
+            same_column = overlap >= 0.5 * min(first.rect.w, box.rect.w)
+            # A speaker name is typeset larger than the dialogue under it. Wrapped
+            # lines of one paragraph share the font, so their heights match; a big
+            # title must not inflate the gap it is measured against.
+            same_style = abs(box.rect.h - last.rect.h) <= 0.2 * max(box.rect.h, last.rect.h)
+            vertical = (
+                same_style
+                and -0.2 * last.rect.h <= v_gap <= max_gap_ratio * last.rect.h
+                and same_column
+            )
             if same_row or vertical:
                 group.append(box)
                 placed = True
