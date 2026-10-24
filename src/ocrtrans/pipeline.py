@@ -32,7 +32,6 @@ def _offset(rect: Rect, origin: Rect) -> Rect:
 class EventKind(str, Enum):
     OCR_RESULT = "ocr_result"
     TRANSLATION_RESULT = "translation_result"
-    SKIP = "skip"
     CAPTURE_HEALTH = "capture_health"
     RESET = "reset"
 
@@ -61,11 +60,13 @@ class PipelineEvent:
     kind: EventKind
     epoch: int
     at: float
+    scan_id: int = 0
     blocks: list[BlockView] = field(default_factory=list)
-    observed_block_ids: list[int] = field(default_factory=list)
     items: list[RenderItem] = field(default_factory=list)
     health: Health | None = None
     reason: str = ""
+    scan_interval_s: float = 0.0
+    scan_ms: float = 0.0
 
 
 class ExclusionGate(Protocol):
@@ -164,6 +165,7 @@ class Pipeline:
         self._switch_lock = threading.Lock()
         self._last_mt: dict[int, tuple[str, int]] = {}
         self._known_ids: set[int] = set()
+        self._scan_id = 0
 
         self._ocr_passes = 0
         self._ocr_errors = 0
@@ -207,6 +209,7 @@ class Pipeline:
         self._mt_queue.clear()
         self._last_mt.clear()
         self._known_ids.clear()
+        self._scan_id = 0
         self.tracker.reset()
         self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
 
@@ -226,6 +229,7 @@ class Pipeline:
         self._mt_queue.clear()
         self._last_mt.clear()
         self._known_ids.clear()
+        self._scan_id = 0
         self.tracker.reset()
         self.emit(PipelineEvent(kind=EventKind.RESET, epoch=self.epoch, at=self.clock()))
 
@@ -235,6 +239,7 @@ class Pipeline:
         self._ocr_queue.clear()
         self._mt_queue.clear()
         self._known_ids.clear()
+        self._scan_id = 0
         self.emit(
             PipelineEvent(
                 kind=EventKind.RESET,
@@ -265,6 +270,19 @@ class Pipeline:
         }
 
     # ---- capture ----------------------------------------------------------
+
+    @staticmethod
+    def _views(blocks: list[TrackBlock], origin: Rect) -> list[BlockView]:
+        return [
+            BlockView(
+                block_id=block.id,
+                rect=_offset(block.rect, origin),
+                source_text=block.text,
+                state="stable" if block.state is BlockState.STABLE else "pending",
+                line_px=block.line_px,
+            )
+            for block in blocks
+        ]
 
     def _region(self) -> Rect:
         return union_all(self._regions) if self._regions else Rect(0, 0, 1920, 1080)
@@ -307,10 +325,22 @@ class Pipeline:
                 continue
 
             decision = self.tracker.update(frame, self.clock())
+            self._scan_id += 1
             if decision.skip:
-                self.emit(PipelineEvent(kind=EventKind.SKIP, epoch=self.epoch, at=self.clock()))
+                origin = self._region()
+                self.emit(
+                    PipelineEvent(
+                        kind=EventKind.OCR_RESULT,
+                        epoch=self.epoch,
+                        at=self.clock(),
+                        scan_id=self._scan_id,
+                        blocks=self._views(self.tracker.blocks(), origin),
+                    )
+                )
             else:
-                self._ocr_queue.put((self.epoch, frame, decision, self._region()))
+                self._ocr_queue.put(
+                    (self.epoch, self._scan_id, frame, decision, self._region())
+                )
             self._sleep_rest(started)
 
     # ---- OCR --------------------------------------------------------------
@@ -320,7 +350,7 @@ class Pipeline:
             task = self._ocr_queue.take()
             if task is None:
                 continue
-            epoch, frame, decision, origin = task
+            epoch, scan_id, frame, decision, origin = task
             if epoch != self.epoch or not self.enabled:
                 continue
             try:
@@ -335,24 +365,15 @@ class Pipeline:
             if epoch != self.epoch:
                 continue
             self._ocr_passes += 1
-            self._last_blocks = len(blocks)
-            views = [
-                BlockView(
-                    block_id=block.id,
-                    rect=_offset(block.rect, origin),
-                    source_text=block.text,
-                    state="stable" if block.state is BlockState.STABLE else "pending",
-                    line_px=block.line_px,
-                )
-                for block in blocks
-            ]
+            snapshot = self.tracker.blocks()
+            self._last_blocks = len(snapshot)
             self.emit(
                 PipelineEvent(
                     kind=EventKind.OCR_RESULT,
                     epoch=epoch,
                     at=self.clock(),
-                    blocks=views,
-                    observed_block_ids=observed,
+                    scan_id=scan_id,
+                    blocks=self._views(snapshot, origin),
                 )
             )
             candidates = [

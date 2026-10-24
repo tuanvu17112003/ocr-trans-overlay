@@ -30,6 +30,7 @@ class FakeTracker:
     def __init__(self, crop=False, skip=False):
         self.crop = crop
         self.skip = skip
+        self._blocks = []
 
     def update(self, frame, now):
         if self.skip:
@@ -39,15 +40,16 @@ class FakeTracker:
         return Decision(full_detect=True)
 
     def observe(self, boxes, now, scope=None):
-        if not boxes:
-            return []
-        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)]
+        self._blocks = [] if not boxes else [
+            TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)
+        ]
+        return list(self._blocks)
 
     def blocks(self):
-        return [TrackBlock(id=1, rect=Rect(0, 0, 50, 12), text="XXX", state=BlockState.STABLE)]
+        return list(self._blocks)
 
     def reset(self):
-        pass
+        self._blocks = []
 
 
 class FastEngine:
@@ -149,21 +151,6 @@ def test_engine_switch_refuses_while_a_translation_is_running():
     slow.release.set()
     assert slow.finished.wait(2.0), "old worker never finished"
     assert p.unload_engine(timeout=2.0) is True
-    p.stop()
-
-
-def test_crop_scan_reports_only_observed_ids():
-    p = pipeline_with(ocr=FakeOcr(boxes=[Box(Rect(0, 0, 50, 12), "X", 0.9)]), tracker_returns_crop=True)
-    p.start()
-    ev = p.wait_event(lambda e: e.kind == EventKind.OCR_RESULT and e.observed_block_ids)
-    assert ev.observed_block_ids == [ev.blocks[0].block_id]
-    p.stop()
-
-
-def test_skip_is_reported_as_skip_not_empty_ocr():
-    p = pipeline_with(tracker_returns_skip=True)
-    p.start()
-    assert p.wait_event(lambda e: e.kind == EventKind.SKIP) is not None
     p.stop()
 
 
