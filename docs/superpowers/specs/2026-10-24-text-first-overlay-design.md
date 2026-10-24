@@ -193,18 +193,37 @@ class BlockMemory:
 - `stability_profile` keeps its name in the config and control window but maps
   to seconds.
 - Snapshot contract: matched blocks **plus** blocks whose `last_seen` is within
-  `ttl = max(2 * interval, 400 ms)`. A block absent from that list is expired
+  `ttl = min(max(2 * interval, 0.4 s), 1.0 s)` (the cap stops a slow pass from
+  pinning a stale cover for seconds). A block absent from that list is expired
   and the overlay removes it. One false-negative pass at ~3 passes/s keeps the
   cover ~0.6 s instead of strobing it.
 
 ### 4.5 ScanBudget
 
+One owner: `ScanBudget.interval(fps, last_ocr_ms, empty_count, wake) -> float`.
+Tests call it and assert its return value; they never re-derive the formula, so
+code and test cannot drift apart.
+
 ```python
-base = max(1.0 / fps, 0.25, 1.5 * last_ocr_ms / 1000)
-if consecutive_empty >= 3:
-    base = max(base, 1.0)          # empty-screen backoff
-interval = base                    # a wake only cancels the empty backoff
+MIN_INTERVAL_S = 0.25
+OCR_HEADROOM = 1.5
+EMPTY_BACKOFF_S = 1.0
+
+base = max(1.0 / fps, MIN_INTERVAL_S, OCR_HEADROOM * last_ocr_ms / 1000)
+if empty_count >= 3:
+    base = max(base, EMPTY_BACKOFF_S)
+interval = base            # a wake only cancels the empty backoff
 ```
+
+Pinned cases (fps 15):
+
+| last_ocr_ms | empty_count | wake | interval |
+|---|---|---|---|
+| 300 | 0 | no | 0.450 s |
+| 300 | 3 | no | 1.000 s |
+| 300 | 3 | yes | 0.450 s |
+| 852 | 3 | yes | 1.278 s |
+| 20 | 0 | no | 0.250 s |
 
 - Origin is the **end** of the previous pass: `next_scan_at = ocr_end + interval`.
 - The floor is `1.5 * last_ocr_ms`: an 852 ms pass means a >= 1.28 s interval
@@ -299,8 +318,11 @@ Unit:
 - `test_block_memory_requires_exact_text_for_stability` — a one-character
   wobble never becomes STABLE and never reuses the old translation.
 - `test_block_memory_stability_uses_time_not_passes` (150/300 ms profiles).
-- `test_scan_budget_never_exceeds_budget` (fake clock, measured 300 ms pass ->
-  interval >= 600 ms) and empty-output backoff.
+- `test_ttl_is_capped_at_one_second` — an 852 ms pass yields ttl 1.0 s, not
+  1.7 s (same fake-clock helper as ScanBudget).
+- `test_scan_budget_matches_the_formula` (fake clock; a 300 ms pass yields
+  `max(1/fps, 0.25, 0.45)` = 450 ms at 15 fps, and the test asserts the value,
+  not a hand-rounded number) and empty-output backoff.
 - `test_budget_never_below_measured_ocr_time` — an 852 ms pass plus a wake
   still yields an interval >= 1.28 s.
 - `test_pending_frame_is_not_replaced` — the capture thread does not grab while
@@ -377,8 +399,8 @@ low-VRAM machine, and it reuses `_OnlineBase`-like HTTP or a thin local class.
 - OCR wobble on a moving background can clear a cover and re-request MT (exact
   text, no fuzzy reuse). Cost is bounded by the cache and the 12-items-per-pass
   cap; the alternative (fuzzy reuse) risks showing the wrong number or word.
-- A 0.6 s TTL means a subtitle that disappears can stay covered for one pass.
-  Chosen over strobing on every false-negative pass.
+- A TTL of 0.4-1.0 s means a subtitle that disappears can stay covered for up
+  to 1 s on a slow pass. Chosen over strobing on every false-negative pass.
 
 ## 10. Decisions I made (check these while reading)
 
@@ -388,8 +410,10 @@ low-VRAM machine, and it reuses `_OnlineBase`-like HTTP or a thin local class.
    identity either (rect score is).
 2. Hide, never show stale: a source change hides the block at once, even at the
    cost of a 200-800 ms gap until the new translation.
-3. Blocks leave the snapshot only after `ttl` (`max(2 * interval, 400 ms)`), so
-   one false-negative pass at ~3 passes/s keeps the cover ~0.6 s.
+3. Blocks leave the snapshot only after
+   `ttl = min(max(2 * interval, 0.4 s), 1.0 s)`, so one false-negative pass at
+   ~3 passes/s keeps the cover ~0.6 s and a slow machine never pins it past
+   1 s.
 4. `WGC_FALLBACK` is a working frame and does not hide anything; only
    `RECREATING`/`BLACK`/`BLOCKED` engage the 1 s hold, and that hold suppresses
    painting without wiping the translation.
