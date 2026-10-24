@@ -43,14 +43,21 @@ def remap(region: NormalizedRegion, old_monitor: Rect, new_monitor: Rect) -> tup
     return to_physical(region, new_monitor), aspect_changed
 
 
+def clamp_rect(rect: Rect, monitor: Rect, min_size: int = 16) -> Rect:
+    """Fit a capture rect inside the monitor, at least min_size on each side."""
+    w = min(max(rect.w, min_size), monitor.w)
+    h = min(max(rect.h, min_size), monitor.h)
+    x = min(max(rect.x, monitor.x), monitor.right - w)
+    y = min(max(rect.y, monitor.y), monitor.bottom - h)
+    return Rect(x, y, w, h)
+
+
 class RegionSet:
     @staticmethod
     def from_config(cfg: Config, monitor: Rect) -> list[Rect]:
-        if cfg.region_mode == "monitor":
-            return [Rect(monitor.x, monitor.y, monitor.w, monitor.h)]
         if not cfg.regions:
             return [Rect(monitor.x, monitor.y, monitor.w, monitor.h)]
         regions = [NormalizedRegion(**r) for r in cfg.regions]
         if cfg.region_mode == "single":
             regions = regions[:1]
-        return [to_physical(r, monitor) for r in regions]
+        return [clamp_rect(to_physical(r, monitor), monitor) for r in regions]

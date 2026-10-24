@@ -46,7 +46,7 @@ LOCAL_REPOS = {
     "nllb": "facebook/nllb-200-distilled-600M",
     "envit5": "VietAI/envit5-translation",
 }
-MODES = ["single", "multi", "monitor"]
+MODES = ["single", "multi"]
 
 
 def build_local(name: str):

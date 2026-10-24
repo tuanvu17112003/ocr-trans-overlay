@@ -9,7 +9,7 @@ from pathlib import Path
 
 ENGINES = frozenset({"nllb", "envit5", "argos", "google", "gemini", "deepl", "mymemory"})
 STABILITY_PROFILES = frozenset({"safe", "fast"})
-REGION_MODES = frozenset({"single", "multi", "monitor"})
+REGION_MODES = frozenset({"single", "multi"})
 
 
 @dataclass
@@ -55,6 +55,8 @@ def load_config(path: Path | None = None) -> Config:
     if not path.exists():
         return Config()
     raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("region_mode") == "monitor":
+        raw["region_mode"] = "single"  # the mode is gone; keep the saved regions
     known = {f for f in Config.__dataclass_fields__}
     cfg = Config(**{k: v for k, v in raw.items() if k in known})
     _validate(cfg)
