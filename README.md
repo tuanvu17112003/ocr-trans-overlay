@@ -4,9 +4,22 @@ Captures a game region, OCRs English text, translates it to Vietnamese and paint
 translation over the original text in a click-through overlay that screen capture does
 not see. Local engines by default; free online engines are opt-in.
 
+## Download (no Python needed)
+
+Grab `OCRTrans-0.1.0-win64-cpu.zip` from the
+[latest release](https://github.com/tuanvu17112003/ocr-trans-overlay/releases/latest),
+unpack it anywhere and run `OCRTrans.exe`. That build is CPU-only (onnxruntime CPU +
+Argos) so it runs on any Windows 10/11 x64 machine; unpacking takes a moment the first
+time because the folder is ~930 MB. A `SHA256SUMS` line is published with the zip.
+
+The portable build cannot ship the CUDA stack: `torch+cu130` alone is ~2.9 GB, past the
+2 GB per-file limit a GitHub Release accepts. With an NVIDIA GPU, use the source install
+below instead — it is both faster (NLLB + CUDA OCR) and a smaller download.
+
 ## Requirements
 
 - Windows 11 (tested on 25H2, build 26200)
+- **Either** the portable zip (nothing else), **or**:
 - Python 3.13
 - NVIDIA GPU with CUDA 13 driver (tested on RTX 3080 10 GB)
 
