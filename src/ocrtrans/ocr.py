@@ -216,16 +216,10 @@ class RapidOcrEngine:
         self.downscale_width = downscale_width
         self._engine = None
         self._logged_device = False
-
-    def load(self) -> None:
-        _prepare_cuda_dlls()
-        from rapidocr import RapidOCR
-
-        try:
-            self._engine = RapidOCR(params=self._params(self.use_cuda))
-        except Exception:  # noqa: BLE001 - CUDA missing must not kill the app
-            self.use_cuda = False
-            self._engine = RapidOCR(params=self._params(False))
+        # close() used to assign None and the next read() silently reloaded the
+        # model, so "unload the OCR engine" freed nothing. A closed engine now
+        # stays closed until it is explicitly load()ed again.
+        self._closed = False
 
     @staticmethod
     def _params(use_cuda: bool) -> dict:
@@ -248,6 +242,8 @@ class RapidOcrEngine:
 
     def _ensure_loaded(self) -> None:
         if self._engine is None:
+            if self._closed:
+                raise RuntimeError("OCR engine was closed; call load() before read()")
             self.load()
 
     def read(self, frame: np.ndarray) -> list[Box]:
@@ -298,8 +294,20 @@ class RapidOcrEngine:
             )
         return boxes
 
+    def load(self) -> None:
+        _prepare_cuda_dlls()
+        from rapidocr import RapidOCR
+
+        try:
+            self._engine = RapidOCR(params=self._params(self.use_cuda))
+        except Exception:  # noqa: BLE001 - CUDA missing must not kill the app
+            self.use_cuda = False
+            self._engine = RapidOCR(params=self._params(False))
+        self._closed = False
+
     def close(self) -> None:
         self._engine = None
+        self._closed = True
 
 
 def plan_tiles(

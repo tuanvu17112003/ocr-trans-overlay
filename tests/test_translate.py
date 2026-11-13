@@ -140,3 +140,32 @@ def test_switch_does_not_reload_an_already_loaded_engine():
     service.switch(new)
     assert new.loads == 1
     assert old.unloads == 1
+
+def test_tokens_for_scales_with_the_input():
+    from ocrtrans.translate import MAX_NEW_TOKENS_CEILING, MIN_NEW_TOKENS, tokens_for
+
+    # The floor applies to a short line, and the estimate only adds headroom.
+    assert tokens_for("") == MIN_NEW_TOKENS
+    assert tokens_for("short") >= MIN_NEW_TOKENS
+    long_text = "word " * 120
+    assert tokens_for(long_text) > MIN_NEW_TOKENS
+    assert tokens_for("x" * 5000) == MAX_NEW_TOKENS_CEILING
+
+
+def test_normalize_is_nfc():
+    from ocrtrans.translate import normalize
+
+    decomposed = "Tie\u0302\u0301ng Vie\u0302\u0323t"
+    assert normalize(decomposed) == "Tiếng Việt"
+
+
+def test_cache_exposes_its_hit_rate():
+    from ocrtrans.translate import TranslationCache
+
+    cache = TranslationCache()
+    cache.put("hello", "xin chào")
+    assert cache.get("hello") == "xin chào"
+    cache.get("missing")
+    stats = cache.stats()
+    assert stats["hits"] == 1
+    assert stats["misses"] == 1

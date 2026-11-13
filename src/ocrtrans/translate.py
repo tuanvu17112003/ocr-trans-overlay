@@ -1,4 +1,4 @@
-﻿"""Translation engines (local NLLB / EnViT5), cache and service."""
+"""Translation engines (local NLLB / EnViT5), cache and service."""
 
 from __future__ import annotations
 
@@ -10,7 +10,13 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Literal, Protocol
 
+# A fixed 96 tokens silently truncated long sentences. Vietnamese runs ~7 %
+# longer than English (measured length_ratio 1.07 over the corpus), so the cap is
+# derived from the input length with headroom, and hitting it is logged.
 MAX_NEW_TOKENS = 96
+TOKENS_PER_CHAR = 1.15
+MIN_NEW_TOKENS = 48
+MAX_NEW_TOKENS_CEILING = 320
 
 log = logging.getLogger(__name__)
 
@@ -27,9 +33,22 @@ class Engine(Protocol):
 
 
 def normalize(text: str) -> str:
-    """Trim, drop control characters, collapse whitespace."""
-    cleaned = "".join(ch for ch in text if unicodedata.category(ch)[0] != "C")
+    """NFC, trim, drop control characters, collapse whitespace."""
+    # NFC first: a model can emit decomposed Vietnamese, and decomposed text is
+    # both wider and different as a cache key.
+    cleaned = unicodedata.normalize("NFC", text)
+    cleaned = "".join(
+        " " if ch in "\t\n\r\f\v" else ch
+        for ch in cleaned
+        if ch in "\t\n\r\f\v" or unicodedata.category(ch)[0] != "C"
+    )
     return " ".join(cleaned.split())
+
+
+def tokens_for(text: str) -> int:
+    """Token budget for one input, so a long line is not cut mid-sentence."""
+    estimate = int(len(text) * TOKENS_PER_CHAR) + MIN_NEW_TOKENS
+    return max(MIN_NEW_TOKENS, min(MAX_NEW_TOKENS_CEILING, estimate))
 
 
 class TranslationCache:
@@ -52,6 +71,14 @@ class TranslationCache:
         self._data.move_to_end(key)
         while len(self._data) > self.capacity:
             self._data.popitem(last=False)
+
+    @property
+    def hits(self) -> int:
+        return self._hits
+
+    @property
+    def misses(self) -> int:
+        return self._misses
 
     def stats(self) -> dict[str, int]:
         return {"size": len(self._data), "hits": self._hits, "misses": self._misses}
@@ -117,8 +144,17 @@ class _LocalEngine:
         extra = {}
         if self._tgt_lang:
             extra["forced_bos_token_id"] = self._tokenizer.convert_tokens_to_ids(self._tgt_lang)
+        budget = max(tokens_for(text) for text in texts)
         with torch.no_grad():
-            ids = self._model.generate(**inputs, max_new_tokens=MAX_NEW_TOKENS, **extra)
+            ids = self._model.generate(**inputs, max_new_tokens=budget, **extra)
+        if ids.shape[1] >= budget:
+            # Every sequence hit the ceiling: the tail of the longest line was
+            # almost certainly cut. Making that visible is the point.
+            log.warning(
+                "translation hit the %d-token ceiling (%d chars input)",
+                budget,
+                max(len(text) for text in texts),
+            )
         out = self._tokenizer.batch_decode(ids, skip_special_tokens=True)
         if self._strip_prefix:
             out = [t.removeprefix(self._strip_prefix).strip() for t in out]
@@ -283,4 +319,3 @@ class TranslationService:
                 old.unload()
                 _empty_cuda_cache()
             self.engine = engine
-

@@ -29,9 +29,14 @@ def set_debug(enabled: bool) -> None:
     logging.getLogger("argostranslate").setLevel(logging.WARNING)
 
 
-def setup_logging(level: int = logging.INFO) -> None:
+def log_directory() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "OCRTrans"
     base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def setup_logging(level: int = logging.INFO) -> None:
+    base = log_directory()
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
     root = logging.getLogger()
     root.setLevel(logging.DEBUG if os.environ.get("OCRTRANS_DEBUG") else level)

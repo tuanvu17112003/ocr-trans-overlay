@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import logging
 import os
 import queue
 import sys
+import threading
 import time
 from dataclasses import asdict
 
@@ -27,7 +29,8 @@ from .exclusion import AffinityGate
 from .geometry import Rect
 from .hotkeys import HotkeyManager
 from .hud import HudWindow
-from .logging_setup import setup_logging
+from .logging_setup import log_directory, setup_logging
+from .metrics import Metrics, MetricsLog
 from .ocr import RapidOcrEngine
 from .online import DeepLEngine, GeminiEngine, GoogleEngine, MyMemoryEngine, OnlineRouter
 from .overlay import OverlayWindow
@@ -62,6 +65,52 @@ LOCAL_REPOS = {
     "envit5": "VietAI/envit5-translation",
 }
 MODES = ["single", "multi"]
+# Named mutex so a second launch raises the running window instead of starting a
+# second overlay on top of the first one.
+SINGLE_INSTANCE_MUTEX = "Local\\OCRTrans_single_instance"
+ERROR_ALREADY_EXISTS = 183
+
+
+def _acquire_single_instance() -> int | None:
+    """Returns a handle to keep alive, or None when another instance owns it."""
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        kernel32.CreateMutexW.restype = ctypes.c_void_p
+        handle = kernel32.CreateMutexW(None, False, SINGLE_INSTANCE_MUTEX)
+        if not handle:
+            return None
+        if kernel32.GetLastError() == ERROR_ALREADY_EXISTS:
+            kernel32.CloseHandle(ctypes.c_void_p(handle))
+            return None
+        return handle
+    except Exception:  # noqa: BLE001 - a missing mutex must not block startup
+        log.exception("single-instance check failed; starting anyway")
+        return None
+
+
+def _install_crash_handlers(log_path) -> None:
+    """A frozen windowed build has no console, so a crash must reach a file."""
+    try:
+        handle = open(log_path, "a", encoding="utf-8")
+        faulthandler.enable(handle)
+    except OSError:
+        pass
+
+    def hook(exc_type, exc, tb):
+        log.critical("unhandled exception", exc_info=(exc_type, exc, tb))
+        sys.__excepthook__(exc_type, exc, tb)
+
+    def thread_hook(args):
+        log.critical(
+            "unhandled exception in thread %s",
+            args.thread.name if args.thread else "?",
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
 
 
 def build_local(name: str):
@@ -125,8 +174,16 @@ def main() -> int:
     args = parser.parse_args()
 
     setup_logging()
+    log_dir = log_directory()
+    _install_crash_handlers(log_dir / "crash.log")
+    instance = _acquire_single_instance()
+    if instance is None:
+        log.warning("another OCRTrans instance is already running; exiting")
+        return 0
     cfg = load_config()
     app = QApplication(sys.argv)
+    metrics = Metrics()
+    metrics_log = MetricsLog(log_dir / "metrics.jsonl")
     apply_theme(app)
 
     screen_q = app.primaryScreen().geometry()
@@ -205,11 +262,13 @@ def main() -> int:
             "error": state["error"],
             "rendered": overlay.shown,
             "hidden_stale": overlay.state.hidden_stale,
+            "held": overlay.state.held,
         }
         now = time.monotonic()
         if now - _logged_at["at"] >= 5.0:
             _logged_at["at"] = now
             log.info("stats %s", data)
+            metrics_log.maybe_write(metrics)
         return data
 
     hud = HudWindow(status)
@@ -267,6 +326,7 @@ def main() -> int:
                 fps=cfg.capture_fps,
                 candidate_profile=cfg.candidate_profile,
                 min_confidence=cfg.min_confidence,
+                metrics=metrics,
             )
             rects = RegionSet.from_config(cfg, screen)
             pipeline.set_regions(rects)

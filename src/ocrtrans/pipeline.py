@@ -21,6 +21,7 @@ from .geometry import Box, Rect, union_all
 from .ocr import group_blocks, merge_boxes, plan_tiles
 from .scan import EMPTY_BACKOFF_S, MIN_INTERVAL_S, WAKE_SAMPLE_S, ScanBudget, frame_changed
 from .textnorm import scan_fingerprint, similarity
+from .metrics import Metrics
 from .stats import LatencyStats
 from .translate import Engine, TranslationService
 
@@ -157,6 +158,7 @@ class Pipeline:
         tile_cooldown_s: float = 2.0,
         candidate_profile: str = "subtitle",
         min_confidence: float = 0.70,
+        metrics: Metrics | None = None,
         clock=time.monotonic,
     ) -> None:
         self.capture = capture
@@ -168,6 +170,7 @@ class Pipeline:
         self.tile_cooldown_s = tile_cooldown_s
         self.candidate_profile = candidate_profile
         self.min_confidence = min_confidence
+        self.metrics = metrics or Metrics()
         self.clock = clock
         self.memory = memory or BlockMemory()
         self.budget = budget or ScanBudget(fps)
@@ -339,6 +342,7 @@ class Pipeline:
             "grab_p50": round(self._grab_stats.percentile(50), 1),
             "grab_p95": round(self._grab_stats.percentile(95), 1),
             "gate": self._gate_stats.as_dict(),
+            "metrics": self.metrics.snapshot()["counters"],
         }
 
     # ---- capture ----------------------------------------------------------
@@ -460,6 +464,8 @@ class Pipeline:
                 continue
 
             wake, self._wake_prev = frame_changed(self._wake_prev, frame)
+            if wake:
+                self.metrics.counter("frame_wakes")
             self._wake = self._wake or wake
             interval = self._scan_interval()
             self._interval = interval
@@ -468,6 +474,7 @@ class Pipeline:
 
             self._wake = False  # the change is about to be scanned
             self._scan_id += 1
+            self.metrics.counter("scan_passes")
             self._ocr_queue.put((self.epoch, self._scan_id, frame, self._region()))
 
     # ---- OCR --------------------------------------------------------------
@@ -486,6 +493,7 @@ class Pipeline:
                 blocks = self._run_ocr(frame, epoch)
             except Exception:  # noqa: BLE001 - OCR failure must not kill the loop
                 self._ocr_errors += 1
+                self.metrics.counter("ocr_errors")
                 if self._ocr_errors == 1 or self._ocr_errors % 100 == 0:
                     log.exception("OCR pass failed (%d so far)", self._ocr_errors)
                 continue
@@ -496,6 +504,8 @@ class Pipeline:
             if epoch != self.epoch:
                 continue
             self._ocr_stats.add(self._last_ocr_ms, cached=False)
+            self.metrics.observe("ocr_ms", self._last_ocr_ms)
+            self.metrics.counter("blocks_detected", len(blocks))
             self._ocr_passes += 1
             now = self.clock()
             self._scan_times.append(now)
@@ -570,6 +580,7 @@ class Pipeline:
             boxes = self._read_tiled(frame)
             tiled = True
             self._tiled += 1
+            self.metrics.counter("tiled_rescues")
             self._last_tiled_at = self.clock()
         self._prev_tiled = tiled
         # Filter before grouping: grouping merges whatever it is given, so an
@@ -686,6 +697,11 @@ class Pipeline:
             self._inflight -= len(tasks)
         elapsed = (self.clock() - started) * 1000
         self._mt_stats.add(elapsed, cached=False)
+        self.metrics.observe("mt_ms", elapsed)
+        self.metrics.counter("mt_requests", len(tasks))
+        self.metrics.counter(
+            "mt_cache_hits", sum(1 for _result, cached in results if cached)
+        )
         chars = sum(len(payload[1]) for _, payload in tasks)
         if elapsed >= 500:
             log.warning(
@@ -724,6 +740,7 @@ class Pipeline:
                     line_px=line_px,
                 )
             )
+        self.metrics.counter("mt_results", len(items))
         if items:
             self.emit(
                 PipelineEvent(

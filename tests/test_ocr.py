@@ -1,4 +1,4 @@
-﻿import numpy as np
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
@@ -268,3 +268,27 @@ def test_two_columns_merge_within_their_own_column():
         "Quest: find the key Reward: 300 gold",
         "HP 100 Ammo 30",
     ]
+class _ClosedEngine:
+    """RapidOcrEngine.close() must actually close, not mark for lazy reload."""
+
+    def test_a_closed_engine_does_not_silently_reload(self):
+        from ocrtrans.ocr import RapidOcrEngine
+
+        engine = RapidOcrEngine()
+        engine._engine = object()  # pretend it is loaded; no model costs here
+        engine.close()
+        try:
+            engine._ensure_loaded()
+        except RuntimeError as exc:
+            assert "closed" in str(exc)
+        else:  # pragma: no cover - the assertion below is the failure
+            raise AssertionError("a closed engine silently reloaded its model")
+
+    def test_load_clears_the_closed_flag(self):
+        from ocrtrans.ocr import RapidOcrEngine
+
+        engine = RapidOcrEngine()
+        engine.close()
+        engine._closed = False  # avoid actually loading a model in a unit test
+        engine._engine = object()
+        engine._ensure_loaded()
