@@ -19,13 +19,18 @@ from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
 from .geometry import Box, Rect, union_all
 from .ocr import group_blocks, merge_boxes, plan_tiles
-from .scan import EMPTY_BACKOFF_S, MIN_INTERVAL_S, STEADY_INTERVAL_S, WAKE_SAMPLE_S, ScanBudget, frame_changed
+from .scan import EMPTY_BACKOFF_S, MIN_INTERVAL_S, WAKE_SAMPLE_S, ScanBudget, frame_changed
+from .textnorm import scan_fingerprint, similarity
 from .stats import LatencyStats
 from .translate import Engine, TranslationService
 
 log = logging.getLogger(__name__)
 
 RECENT_TEXT_S = 2.0  # a miss this soon after real text must not slow recovery
+# A block has to survive this many passes before it counts as "text on screen"
+# for the empty-screen backoff. A one-pass detector artefact must not keep the
+# scanner at the fast cadence.
+CONFIRM_PASSES = 2
 
 
 def _offset(rect: Rect, origin: Rect) -> Rect:
@@ -190,6 +195,16 @@ class Pipeline:
         self._last_tiled_at = -1e9
         self._prev_tiled = False
         self._last_snapshot: tuple = ()
+        # The last few scheduling snapshots. Comparing only against the previous
+        # pass is not enough: a recogniser that alternates between two readings
+        # of the same caption (A, B, A, B) would look "changed" on every pass and
+        # never reach the steady cadence, which is exactly the reported symptom.
+        self._recent_snapshots: deque = deque(maxlen=3)
+        # Counter of consecutive passes whose *scheduling* fingerprint was
+        # unchanged. It decays by one instead of resetting to zero: an OCR read
+        # that wobbles every other pass would otherwise never leave the fast
+        # cadence, which is exactly the "scans too much on a moving background"
+        # report.
         self._same_text_passes = 0
         self._last_text_at: float | None = None
         self._scan_times: deque[float] = deque()
@@ -252,6 +267,7 @@ class Pipeline:
         self._prev_tiled = False
         self._last_tiled_at = -1e9
         self._last_snapshot = ()
+        self._recent_snapshots.clear()
         self._same_text_passes = 0
         self._last_text_at = None
 
@@ -343,6 +359,31 @@ class Pipeline:
     def _region(self) -> Rect:
         return union_all(self._regions) if self._regions else Rect(0, 0, 1920, 1080)
 
+    @staticmethod
+    def _scheduling_snapshot(blocks: list[TrackBlock]) -> tuple:
+        """Fingerprint of the text set, ordered so it cannot depend on detection order.
+
+        Deliberately `scan_fingerprint` and not the exact text: this only decides
+        the scan cadence. Validity is decided by exact text elsewhere.
+        """
+        return tuple(sorted(scan_fingerprint(block.text) for block in blocks))
+
+    @staticmethod
+    def _snapshots_agree(a: tuple, b: tuple) -> bool:
+        """True when two snapshots are the same screen read twice.
+
+        Exact tuple equality is too strict: a recogniser on a moving background
+        alternates between readings like "traveler." / "traveler" / "traveller",
+        and an exact comparison calls every one of those a change. Comparing
+        block-by-block with a high similarity threshold keeps the cadence steady
+        without ever letting a real edit through: a changed word drops the score
+        well below the threshold (measured in tests/test_textnorm.py).
+        """
+        if not a or not b or len(a) != len(b):
+            return a == b
+        first, second = sorted(a), sorted(b)
+        return all(similarity(left, right) >= 0.95 for left, right in zip(first, second))
+
     def _scan_interval(self) -> float:
         """Empty-pass backoff, but not right after text: one missed caption
         (fade, scene cut) must not cost a whole extra second to recover."""
@@ -351,7 +392,11 @@ class Pipeline:
             and self.clock() - self._last_text_at < RECENT_TEXT_S
         )
         empty = 0 if recent_text else self._empty_count
-        return self.budget.interval(self._last_ocr_ms, empty, self._wake)
+        # Steady decay only applies while text is actually on screen. An empty
+        # screen already has its own 1 s backoff, and compounding the two would
+        # make a caption that appears take seconds to notice.
+        steady = self._same_text_passes if self._last_snapshot else 0
+        return self.budget.interval(self._last_ocr_ms, empty, self._wake, steady)
 
     def _capture_loop(self) -> None:
         try:
@@ -417,11 +462,6 @@ class Pipeline:
             wake, self._wake_prev = frame_changed(self._wake_prev, frame)
             self._wake = self._wake or wake
             interval = self._scan_interval()
-            if self._same_text_passes >= 2:
-                # The text on screen did not change: scan at half rate. This is
-                # the only repeating load, and video pixels always "wake", so
-                # without it a static caption costs 4 passes/s for minutes.
-                interval = max(interval, STEADY_INTERVAL_S)
             self._interval = interval
             if self.clock() - self._last_ocr_end < interval:
                 continue
@@ -478,15 +518,26 @@ class Pipeline:
                     len(blocks),
                     self._interval,
                 )
-            self._empty_count = 0 if blocks else self._empty_count + 1
-            if blocks:
+            # Only blocks the memory has actually tracked across passes count as
+            # text here. The old rule used "any block at all", so a single
+            # spurious detection every second or two kept the empty-screen
+            # backoff permanently disabled.
+            confirmed = [block for block in blocks if block.seen >= CONFIRM_PASSES]
+            self._empty_count = 0 if confirmed else self._empty_count + 1
+            if confirmed:
                 self._last_text_at = now
-            snapshot = tuple(block.text for block in blocks)
-            if snapshot == self._last_snapshot:
+            snapshot = self._scheduling_snapshot(blocks)
+            if snapshot and (
+                self._snapshots_agree(snapshot, self._last_snapshot)
+                or any(self._snapshots_agree(snapshot, recent) for recent in self._recent_snapshots)
+            ):
+                # The screen is not changing, only the recogniser is wobbling.
                 self._same_text_passes += 1
             else:
-                self._same_text_passes = 0
-                self._last_snapshot = snapshot
+                self._same_text_passes = max(0, self._same_text_passes - 1)
+            self._last_snapshot = snapshot
+            if snapshot:
+                self._recent_snapshots.append(snapshot)
             self.emit(
                 PipelineEvent(
                     kind=EventKind.OCR_RESULT,

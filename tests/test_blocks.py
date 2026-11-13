@@ -73,3 +73,17 @@ def test_match_score_prefers_overlap_and_containment():
     assert match_score(a, Rect(0, 0, 100, 20)) == 1.0
     assert match_score(a, Rect(0, 0, 100, 24)) >= 0.6
     assert match_score(a, Rect(500, 500, 10, 10)) == 0.0
+
+def test_seen_counts_how_many_passes_matched_a_block():
+    m = BlockMemory("fast")
+    assert m.observe([box("HELLO")], 0.0, 1.0)[0].seen == 1
+    assert m.observe([box("HELLO")], 0.1, 1.0)[0].seen == 2
+    assert m.observe([box("HELLO")], 0.2, 1.0)[0].seen == 3
+
+
+def test_a_fresh_block_starts_at_one_pass():
+    m = BlockMemory("fast")
+    m.observe([box("FIRST")], 0.0, 1.0)
+    blocks = m.observe([box("SECOND", y=60)], 0.1, 1.0)
+    second = [b for b in blocks if b.text == "SECOND"][0]
+    assert second.seen == 1

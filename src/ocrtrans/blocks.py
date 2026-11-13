@@ -25,6 +25,10 @@ class TrackBlock:
     first_seen: float = 0.0
     last_seen: float = 0.0
     line_px: int = 0
+    # How many passes have matched this block at its current text. A block seen
+    # once may be a detector artefact; the empty-screen backoff only trusts
+    # blocks that survived more than one pass.
+    seen: int = 0
 
 
 def _normalize(text: str) -> str:
@@ -87,6 +91,7 @@ class BlockMemory:
                 matched.add(best.id)
                 best.rect = box.rect
                 best.last_seen = now
+                best.seen += 1
                 if box.line_px:
                     best.line_px = box.line_px
                 self._apply_text(best, box.text, now)

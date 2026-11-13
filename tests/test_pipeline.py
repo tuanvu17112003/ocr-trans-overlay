@@ -584,3 +584,99 @@ def test_a_stable_text_set_scans_at_half_rate():
     p.stop()
     assert passes >= 5
     assert passes <= 9, "a static snapshot kept the full 4 passes/s"
+class WobblingOcr:
+    """Reads the same caption, with a one-character OCR wobble every other pass."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        # All four readings are the same sentence; only the trailing period, the
+        # comma and one confusable glyph move, which is what a moving background
+        # does to the recogniser.
+        self.texts = [
+            "Open the gate, traveler.",
+            "Open the gate, traveler",
+            "Open the gate traveler.",
+            "0pen the gate, traveler.",
+        ]
+
+    def read(self, frame):
+        text = self.texts[self.calls % len(self.texts)]
+        self.calls += 1
+        return [Box(Rect(10, 10, 300, 20), text, 0.95)]
+
+
+def test_ocr_wobble_does_not_raise_the_scan_rate():
+    """The reported symptom: text unchanged on screen, scan rate doubles anyway."""
+    ocr = WobblingOcr()
+    p = pipeline_with(ocr=ocr, fps=15)
+    p.start()
+    time.sleep(3.0)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    # Baseline for a static caption is ~2.15 pass/s; the old reset-to-zero
+    # snapshot comparison measured 3.96 pass/s with this same wobble.
+    assert passes <= 7, f"a one-character wobble pushed the scan rate to {passes / 3.0:.2f}/s"
+
+
+def test_a_real_word_change_still_resets_the_steady_cadence():
+    """The wobble tolerance must not turn into "ignore real edits"."""
+
+    class ChangingOcr:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.texts = ["Open the gate, traveler.", "The gate is locked now."]
+
+        def read(self, frame):
+            text = self.texts[self.calls % 2]
+            self.calls += 1
+            return [Box(Rect(10, 10, 300, 20), text, 0.95)]
+
+    p = pipeline_with(ocr=ChangingOcr(), fps=60)
+    p.start()
+    time.sleep(2.5)
+    stats = p.stats()
+    p.stop()
+    # Alternating real sentences are never "steady", so the cadence stays fast
+    # (a 60 fps budget floor of 0.25 s is ~4 pass/s).
+    assert stats["ocr_passes"] >= 6, "a real text change stopped the scanner"
+
+
+def test_artwork_only_screen_still_backs_off():
+    """Junk must not defeat the empty backoff the way it used to."""
+    junk = [
+        Box(Rect(10, 10, 60, 178), "x.O^", 0.9),
+        Box(Rect(80, 10, 52, 178), "O^III", 0.9),
+    ]
+    p = pipeline_with(ocr=FakeOcr(boxes=junk), fps=15)
+    p.start()
+    time.sleep(3.0)
+    passes = p.stats()["ocr_passes"]
+    blocked = p.stats()["gate"]["rejected"]
+    p.stop()
+    assert blocked > 0, "the candidate gate never saw the artwork boxes"
+    assert passes <= 6, f"artwork kept the scan rate at {passes / 3.0:.2f}/s"
+
+def test_a_single_pass_artefact_does_not_disable_the_empty_backoff():
+    """Junk that appears once must not keep the scanner at the fast cadence.
+
+    The old rule counted "any block" as text, so one spurious detection every
+    couple of seconds kept empty_count at zero and the scanner at 4 passes/s.
+    """
+
+    class FlakyOcr:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def read(self, frame):
+            self.calls += 1
+            # A different bogus reading on every third pass, nothing otherwise.
+            if self.calls % 3 == 0:
+                return [Box(Rect(10, 10, 90, 24), f"zz{self.calls}", 0.8)]
+            return []
+
+    p = pipeline_with(ocr=FlakyOcr(), fps=60)
+    p.start()
+    time.sleep(4.0)
+    passes = p.stats()["ocr_passes"]
+    p.stop()
+    assert passes <= 8, f"a one-pass artefact kept the scan rate at {passes / 4.0:.2f}/s"

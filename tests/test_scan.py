@@ -51,3 +51,33 @@ def test_frame_changed_survives_a_region_size_change():
     changed, new_gray = frame_changed(gray, np.full((100, 400, 3), 30, np.uint8))
     assert changed is False
     assert new_gray.shape != gray.shape
+def test_steady_decay_slows_a_static_caption():
+    b = ScanBudget(15)
+    fast = b.interval(100, 0, False, stable_passes=0)
+    one = b.interval(100, 0, False, stable_passes=2)
+    two = b.interval(100, 0, False, stable_passes=3)
+    many = b.interval(100, 0, False, stable_passes=20)
+    assert fast == pytest.approx(0.25)
+    assert one > fast
+    assert two > one
+    assert many == pytest.approx(1.0), "a static caption must settle at one pass per second"
+
+
+def test_steady_decay_never_goes_below_the_floor():
+    b = ScanBudget(15)
+    # A pass that took 600 ms keeps its 900 ms floor even on the first steady
+    # step: the decay may not race the worker.
+    assert b.interval(600, 0, False, stable_passes=2) >= 0.9
+
+
+def test_wake_cannot_speed_up_a_steady_screen():
+    b = ScanBudget(15)
+    without = b.interval(100, 0, False, stable_passes=5)
+    with_wake = b.interval(100, 0, True, stable_passes=5)
+    assert with_wake == pytest.approx(without), "background motion must not raise the pass rate"
+
+
+def test_wake_still_cancels_the_empty_backoff():
+    b = ScanBudget(15)
+    assert b.interval(100, 5, False, 0) == pytest.approx(1.0)
+    assert b.interval(100, 5, True, 0) == pytest.approx(0.25)
