@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..config import ENGINES, Config
+from ..config import CANDIDATE_PROFILES, ENGINES, Config
 from ..geometry import Rect
 from ..logging_setup import set_debug
 from ..regions import NormalizedRegion, to_physical
@@ -75,6 +75,24 @@ class ControlWindow(QWidget):
         self.profile = QComboBox()
         self.profile.addItems(["safe", "fast"])
         self.profile.setCurrentText(config.stability_profile)
+        self.candidate = QComboBox()
+        self.candidate.addItems(sorted(CANDIDATE_PROFILES))
+        self.candidate.setCurrentText(config.candidate_profile)
+        self.candidate.setToolTip(
+            "How strict the artwork filter is.\n"
+            "subtitle: real caption lines only (default)\n"
+            "hud: also keeps bare numbers like HP 100 or 12:45\n"
+            "all: loosest; use when UI text keeps disappearing"
+        )
+        self.confidence = QSpinBox()
+        self.confidence.setRange(30, 95)
+        self.confidence.setSuffix(" %")
+        self.confidence.setValue(round(config.min_confidence * 100))
+        self.confidence.setToolTip(
+            "Recogniser confidence a line must reach before it is translated.\n"
+            "Raise it if artwork is still being translated; lower it if faint\n"
+            "text is being skipped."
+        )
         self.fps = QSpinBox()
         self.fps.setRange(5, 30)
         self.fps.setValue(config.capture_fps)
@@ -171,6 +189,8 @@ class ControlWindow(QWidget):
         engine_form.addRow("DeepL key", self.deepl_key)
         engine_form.addRow("", self.consent)
         engine_form.addRow("Stability", self.profile)
+        engine_form.addRow("Text filter", self.candidate)
+        engine_form.addRow("Min confidence", self.confidence)
         engine_form.addRow("FPS", self.fps)
 
         layout = QVBoxLayout(self)
@@ -191,6 +211,8 @@ class ControlWindow(QWidget):
 
         self.engine.currentTextChanged.connect(self._sync_keys)
         self._sync_keys(self.engine.currentText())
+        self.candidate.currentTextChanged.connect(lambda _text: self._apply_appearance())
+        self.confidence.valueChanged.connect(lambda _value: self._apply_appearance())
 
         self._timer = QTimer(self)
         self._timer.setInterval(500)
@@ -350,6 +372,8 @@ class ControlWindow(QWidget):
         cfg = self.config
         cfg.engine = self.engine.currentText()
         cfg.stability_profile = self.profile.currentText()
+        cfg.candidate_profile = self.candidate.currentText()
+        cfg.min_confidence = self.confidence.value() / 100.0
         cfg.capture_fps = self.fps.value()
         cfg.region_mode = self.mode.currentText()
         cfg.min_font_px = self.min_font.value()
@@ -370,5 +394,4 @@ class ControlWindow(QWidget):
         if self.on_close is not None:
             self.on_close()
         super().closeEvent(event)
-
 

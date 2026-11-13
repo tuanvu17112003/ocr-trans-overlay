@@ -1,4 +1,4 @@
-﻿"""Application entry point: control window, capture, OCR, translation, overlay."""
+"""Application entry point: control window, capture, OCR, translation, overlay."""
 
 from __future__ import annotations
 
@@ -265,6 +265,8 @@ def main() -> int:
                 budget=ScanBudget(cfg.capture_fps),
                 gate=AffinityGate(),
                 fps=cfg.capture_fps,
+                candidate_profile=cfg.candidate_profile,
+                min_confidence=cfg.min_confidence,
             )
             rects = RegionSet.from_config(cfg, screen)
             pipeline.set_regions(rects)
@@ -292,6 +294,8 @@ def main() -> int:
                 state["engine_request"] = cfg.engine
             pipeline.set_fps(cfg.capture_fps)
             pipeline.set_profile(cfg.stability_profile)
+            pipeline.set_candidate_profile(cfg.candidate_profile)
+            pipeline.set_min_confidence(cfg.min_confidence)
             rects = RegionSet.from_config(cfg, screen)
             pipeline.set_regions(rects)
             overlay.set_regions(rects)
@@ -394,6 +398,8 @@ def main() -> int:
         if pipeline is not None:
             pipeline.set_fps(new_cfg.capture_fps)
             pipeline.set_profile(new_cfg.stability_profile)
+            pipeline.set_candidate_profile(new_cfg.candidate_profile)
+            pipeline.set_min_confidence(new_cfg.min_confidence)
 
     def cycle_mode() -> None:
         cfg.region_mode = MODES[(MODES.index(cfg.region_mode) + 1) % len(MODES)]
@@ -488,4 +494,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

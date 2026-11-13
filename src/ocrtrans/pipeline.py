@@ -1,4 +1,4 @@
-﻿"""Capture -> OCR -> translate pipeline: text-first scanning, bounded by a budget."""
+"""Capture -> OCR -> translate pipeline: text-first scanning, bounded by a budget."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from typing import Callable, Literal, Protocol
 import numpy as np
 
 from .blocks import BlockMemory, BlockState, TrackBlock
+from .candidates import GateStats, filter_candidates
 from .capture import CaptureManager, Health
 from .exclusion import AffinityGate
 from .geometry import Box, Rect, union_all
@@ -149,6 +150,8 @@ class Pipeline:
         gate: ExclusionGate | None = None,
         fps: int = 15,
         tile_cooldown_s: float = 2.0,
+        candidate_profile: str = "subtitle",
+        min_confidence: float = 0.70,
         clock=time.monotonic,
     ) -> None:
         self.capture = capture
@@ -158,6 +161,8 @@ class Pipeline:
         self.gate = gate
         self.fps = fps
         self.tile_cooldown_s = tile_cooldown_s
+        self.candidate_profile = candidate_profile
+        self.min_confidence = min_confidence
         self.clock = clock
         self.memory = memory or BlockMemory()
         self.budget = budget or ScanBudget(fps)
@@ -196,6 +201,7 @@ class Pipeline:
         self._fit_truncated = 0
         self._inflight = 0
         self._ocr_stats = LatencyStats()
+        self._gate_stats = GateStats()
         self._mt_stats = LatencyStats()
         self._grab_stats = LatencyStats()
         self._last_health: Health | None = None
@@ -261,6 +267,12 @@ class Pipeline:
     def set_profile(self, profile: str) -> None:
         self.memory.set_profile(profile)
 
+    def set_candidate_profile(self, profile: str) -> None:
+        self.candidate_profile = profile
+
+    def set_min_confidence(self, value: float) -> None:
+        self.min_confidence = max(0.0, min(1.0, float(value)))
+
     def unload_engine(self, timeout: float = 5.0) -> bool:
         """Free the current model. Only valid while paused; False means busy."""
         if self.enabled:
@@ -310,6 +322,7 @@ class Pipeline:
             "last_scan_ms": round(self._last_ocr_ms, 2),
             "grab_p50": round(self._grab_stats.percentile(50), 1),
             "grab_p95": round(self._grab_stats.percentile(95), 1),
+            "gate": self._gate_stats.as_dict(),
         }
 
     # ---- capture ----------------------------------------------------------
@@ -508,7 +521,18 @@ class Pipeline:
             self._tiled += 1
             self._last_tiled_at = self.clock()
         self._prev_tiled = tiled
-        grouped = group_blocks(boxes)
+        # Filter before grouping: grouping merges whatever it is given, so an
+        # artwork box that survives to this point becomes a paragraph and gets a
+        # translation of its own.
+        region = self._region()
+        boxes = filter_candidates(
+            boxes,
+            frame,
+            profile=self.candidate_profile,
+            region=region,
+            stats=self._gate_stats,
+        )
+        grouped = group_blocks(boxes, min_confidence=self.min_confidence)
         log.debug(
             "ocr text: %s",
             [(b.rect.w, b.rect.h, b.text[:60]) for b in grouped[:8]],

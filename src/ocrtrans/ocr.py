@@ -72,17 +72,16 @@ def _is_label_pair(label: str, text: str) -> bool:
     return first_letter.isupper()
 
 
-def _looks_like_text(rect: Rect, text: str) -> bool:
+def _looks_like_text(rect: Rect, text: str, min_density: float = MIN_TEXT_DENSITY) -> bool:
     """A 1050x317 blob that reads as five letters is a detector artefact.
 
-    A real subtitle line carries ~5e-4 alphanumerics per px²; the blob a
-    stalled video frame produced read "TANOV" at 1.5e-5 and then got a cover
-    and a translation of its own.
-    shortcut: a genuine caption wider than ~1000 px and taller than ~200 px
-    with fewer than six characters is dropped; raise if a title screen needs it.
+    This is the last line of defence only: the real filtering happens in
+    `candidates.filter_candidates` before grouping. Kept because the tiled
+    rescue path can still hand over a large blob and a division here is cheaper
+    than grouping it into a paragraph.
     """
     chars = sum(1 for ch in text if ch.isalnum())
-    return chars / max(1, rect.w * rect.h) >= MIN_TEXT_DENSITY
+    return chars / max(1, rect.w * rect.h) >= min_density
 
 
 def group_blocks(
@@ -90,6 +89,7 @@ def group_blocks(
     max_gap_ratio: float = 0.6,
     min_confidence: float = 0.6,
     max_lines: int = 6,
+    min_density: float = MIN_TEXT_DENSITY,
 ) -> list[Block]:
     """Merge text lines that sit under each other into paragraph blocks."""
     kept: list[Box] = []
@@ -97,7 +97,7 @@ def group_blocks(
         text = _trim_edge_noise(box.text)
         if box.confidence < min_confidence or not text.strip():
             continue
-        if not _looks_like_text(box.rect, text):
+        if not _looks_like_text(box.rect, text, min_density):
             continue
         kept.append(
             Box(rect=box.rect, text=text, confidence=box.confidence, line_px=box.line_px)

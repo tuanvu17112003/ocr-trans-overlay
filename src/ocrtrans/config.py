@@ -10,6 +10,11 @@ from pathlib import Path
 ENGINES = frozenset({"nllb", "envit5", "argos", "google", "gemini", "deepl", "mymemory"})
 STABILITY_PROFILES = frozenset({"safe", "fast"})
 REGION_MODES = frozenset({"single", "multi"})
+# How strict the artwork filter is when deciding what text to translate:
+#   subtitle - only real caption lines (>= 2 letters, 70 % alphanumerics)
+#   hud      - also keeps bare numbers like "HP 100" or "12:45"
+#   all      - the loosest; use when a game's UI text keeps disappearing
+CANDIDATE_PROFILES = frozenset({"subtitle", "hud", "all"})
 
 
 @dataclass
@@ -23,7 +28,8 @@ class Config:
     font_family: str = "Segoe UI"
     text_color: str = "#FFFFFF"
     bg_color: str = "#101014"
-    min_confidence: float = 0.6
+    min_confidence: float = 0.70
+    candidate_profile: str = "subtitle"
     ocr_downscale: int = 1280
     keys: dict[str, str] = field(default_factory=dict)
     fallback_to_local: bool = True
@@ -48,6 +54,11 @@ def _validate(cfg: Config) -> None:
         raise ValueError(f"min_font_px: {cfg.min_font_px} must be at least 8")
     if not 0.0 < cfg.min_confidence <= 1.0:
         raise ValueError(f"min_confidence: {cfg.min_confidence} must be in (0, 1]")
+    if cfg.candidate_profile not in CANDIDATE_PROFILES:
+        raise ValueError(
+            f"candidate_profile: {cfg.candidate_profile!r} "
+            f"must be one of {sorted(CANDIDATE_PROFILES)}"
+        )
 
 
 def load_config(path: Path | None = None) -> Config:
