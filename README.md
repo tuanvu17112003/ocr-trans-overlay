@@ -157,6 +157,51 @@ Run the harness yourself:
 .venv\Scripts\python -m ocrtrans.bench --engine all --quality --perf --ocr --no-comet
 ```
 
+## How scanning behaves (and how to tune it)
+
+Scans are text-first: the scan cadence depends on the text set, not on pixels.
+
+- A caption that stays on screen decays to **one OCR pass per second**
+  (`STEADY_STEP` 1.5x per unchanged pass, capped at `STEADY_MAX_S` 1.0 s).
+- A background that moves while the text does not **cannot raise the rate**. A
+  wake from pixel change only cancels the empty-screen backoff.
+- A one-character recogniser wobble (a dropped period, `O`/`0`, `l`/`I`) is
+  compared through a scheduling fingerprint with a 0.95 similarity threshold, so
+  it does not reset the cadence.
+- A **real** edit is still noticed on the next pass: the fingerprint only decides
+  the cadence, never what is painted.
+
+The overlay:
+
+- A cosmetic wobble **holds** the current cover for up to `hold_max_s` (800 ms)
+  while the retranslation is fetched, instead of tearing the cover down and
+  rebuilding it.
+- Any change that matters -- and **always** a change to a digit -- drops the cover
+  immediately. "You have 100 HP" -> "10 HP" can never keep the old translation.
+- Layout is stable against detector jitter: positions are compared with a 3 px
+  tolerance, the font size is sticky, and a block's wrap no longer depends on
+  whether its neighbour has been translated yet.
+
+### Reducing false translations ("đồ vật giống chữ")
+
+The control window has two knobs for this:
+
+| Setting | What it does |
+|---|---|
+| **Text filter** | `subtitle` (default) keeps caption-shaped lines only; `hud` also keeps bare numbers like `HP 100` / `12:45`; `all` is the loosest |
+| **Min confidence** | Recogniser score a line must reach. Raise it if artwork is still translated; lower it if faint text is skipped. |
+
+Measured on a synthetic icon grid with no text: 8 detector boxes -> 0 translated
+(was 4). Thresholds and the rejected-reason counters are in
+[bench/stability.md](bench/stability.md).
+
+### Diagnostics
+
+The status line shows `kept` / `dropped` (candidate gate), `held` (covers held
+through a wobble) and `hidden`. Every stats interval also appends one JSON line
+to `%LOCALAPPDATA%\OCRTrans\metrics.jsonl`; a crash writes
+`crash.log` next to `app.log`.
+
 ## Known limits
 
 - **HDR**: the display is HDR, so DXGI returns `rgba16f`. Capture always tonemaps through
