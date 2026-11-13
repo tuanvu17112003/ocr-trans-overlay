@@ -1,4 +1,4 @@
-﻿from ocrtrans.capture import Health
+from ocrtrans.capture import Health
 from ocrtrans.geometry import Rect
 from ocrtrans.lifecycle import OverlayState
 from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent, RenderItem
@@ -187,3 +187,90 @@ def test_pending_block_is_not_rendered():
         ev(EventKind.OCR_RESULT, blocks=[block(1, "HEL", state="pending")]), 0.0
     )
     assert out == []
+
+# ---- cosmetic hold: the anti-strobe behaviour -----------------------------
+
+
+def test_a_cosmetic_wobble_keeps_the_cover_up():
+    """One OCR character dropping out of a long line must not tear the cover down."""
+    s = shown_state("Open the gate, traveler.", "Mở cánh cổng, lữ khách.")
+    out = s.on_event(
+        ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "Open the gate traveler")]),
+        0.2,
+    )
+    assert [i.text for i in out] == ["Mở cánh cổng, lữ khách."]
+    assert s.held == 1
+
+
+def test_the_held_cover_is_dropped_when_the_hold_expires():
+    s = OverlayState(hold_max_s=0.8)
+    s.on_event(ev(EventKind.OCR_RESULT, scan_id=1, blocks=[block(1, "Open the gate, traveler.")]), 0.0)
+    s.on_event(
+        ev(EventKind.TRANSLATION_RESULT, items=[item(1, "MỞ CỔNG", "Open the gate, traveler.")]),
+        0.1,
+    )
+    assert s.on_event(
+        ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "Open the gate traveler")]), 0.2
+    )
+    # Still inside the hold window.
+    assert s.tick(0.5) is None
+    # Past it: the cover must go rather than pin a translation for text that has
+    # since changed.
+    assert s.tick(1.2) == []
+
+
+def test_a_held_cover_is_replaced_atomically_by_the_new_translation():
+    s = shown_state("Open the gate, traveler.", "MỞ CỔNG")
+    s.on_event(
+        ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "Open the gate traveler")]), 0.2
+    )
+    out = s.on_event(
+        ev(EventKind.TRANSLATION_RESULT, items=[item(1, "MỞ CỔNG MỚI", "Open the gate traveler")]),
+        0.3,
+    )
+    assert [i.text for i in out] == ["MỞ CỔNG MỚI"]
+    # The swap left no pending state behind.
+    assert s.held == 1
+
+
+def test_a_stale_translation_cannot_land_during_a_hold():
+    """The translation requested for the wobbled text is the only one accepted."""
+    s = shown_state("Open the gate, traveler.", "MỞ CỔNG")
+    s.on_event(
+        ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "Open the gate traveler")]), 0.2
+    )
+    out = s.on_event(
+        ev(EventKind.TRANSLATION_RESULT, items=[item(1, "SAI", "Something else entirely")]), 0.3
+    )
+    assert [i.text for i in out] == ["MỞ CỔNG"]
+
+
+def test_a_word_swap_is_semantic_and_drops_the_cover():
+    s = shown_state("The gate is locked.", "CỔNG ĐÃ KHOÁ")
+    out = s.on_event(
+        ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "The gate is open.")]), 0.2
+    )
+    assert out == []
+
+
+def test_a_digit_change_during_a_hold_still_cuts_immediately():
+    """Cosmetic tolerance must never apply to numbers."""
+    s = shown_state("You have 100 HP", "Bạn có 100 HP")
+    out = s.on_event(
+        ev(EventKind.OCR_RESULT, scan_id=2, blocks=[block(1, "You have 10 HP")]), 0.2
+    )
+    assert out == []
+    assert s.held == 0
+
+
+def test_known_rects_includes_blocks_without_a_translation():
+    s = OverlayState()
+    s.on_event(
+        ev(
+            EventKind.OCR_RESULT,
+            scan_id=1,
+            blocks=[block(1, "ONE"), block(2, "TWO")],
+        ),
+        0.0,
+    )
+    assert set(s.known_rects()) == {1, 2}

@@ -142,3 +142,147 @@ def test_damage_covers_the_grown_box(qapp):
     damage = overlay._damage([], [item])
     assert damage.height() >= item.rect.h + overlay.GROW_PX
     overlay.close()
+
+# ---- damage scope and layout stability ------------------------------------
+
+
+def test_one_changed_block_damages_only_that_block(qapp):
+    """Changing one of eight blocks must not repaint the whole overlay."""
+    overlay = OverlayWindow(Rect(0, 0, 2560, 1440), Config(), queue.Queue())
+    items = [
+        make_item(rect=Rect(100, 100 + index * 90, 300, 60)) for index in range(8)
+    ]
+    for index, item in enumerate(items):
+        item.block_id = index + 1
+    changed = list(items)
+    changed[0] = RenderItem(
+        block_id=1,
+        text="Xin chào bạn",
+        rect=Rect(100, 100, 300, 60),
+        source_text="Hello world",
+        cached=False,
+        line_px=20,
+    )
+    damage = overlay._damage(items, changed)
+    assert damage is not None
+    # The changed block is 300x60; the damage box must stay around that size.
+    assert damage.width() <= 320
+    assert damage.height() <= 60 + overlay.GROW_PX + 8
+    overlay.close()
+
+
+def test_rect_jitter_below_the_snap_tolerance_is_not_a_change(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 2560, 1440), Config(), queue.Queue())
+    base = make_item(rect=Rect(100, 200, 300, 60))
+    base.block_id = 1
+    jittered = RenderItem(
+        block_id=1,
+        text=base.text,
+        rect=Rect(102, 201, 299, 61),
+        source_text=base.source_text,
+        cached=False,
+        line_px=21,
+    )
+    assert overlay._damage([base], [jittered]) is None, "a 1-2 px jitter repainted the overlay"
+    overlay.close()
+
+
+def test_a_moved_block_repaints(qapp):
+    overlay = OverlayWindow(Rect(0, 0, 2560, 1440), Config(), queue.Queue())
+    base = make_item(rect=Rect(100, 200, 300, 60))
+    base.block_id = 1
+    moved = RenderItem(
+        block_id=1,
+        text=base.text,
+        rect=Rect(100, 260, 300, 60),
+        source_text=base.source_text,
+        cached=False,
+        line_px=20,
+    )
+    assert overlay._damage([base], [moved]) is not None
+    overlay.close()
+
+
+def test_layout_of_a_block_does_not_depend_on_a_neighbour_translating(qapp):
+    """Block A must not re-wrap when block B finally gets its translation."""
+    from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent
+
+    events = queue.Queue()
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), events)
+    overlay.set_regions([Rect(80, 80, 240, 300)])
+
+    tall = RenderItem(
+        block_id=1,
+        text="một hai ba bốn năm sáu bảy tám chín mười",
+        rect=Rect(100, 100, 200, 24),
+        source_text="one two three four five six seven eight nine ten",
+        cached=False,
+        line_px=20,
+    )
+    events.put(PipelineEvent(kind=EventKind.OCR_RESULT, epoch=1, at=0.0, scan_id=1, blocks=[
+        BlockView(1, Rect(100, 100, 200, 24), tall.source_text, "stable", 20),
+        BlockView(2, Rect(100, 146, 200, 20), "second block", "stable", 20),
+    ]))
+    events.put(PipelineEvent(kind=EventKind.TRANSLATION_RESULT, epoch=1, at=0.0, scan_id=1, items=[tall]))
+    overlay._drain()
+    first = overlay._layouts[0]
+
+    # Now block 2 gets its own translation and joins the painted list.
+    events.put(PipelineEvent(kind=EventKind.TRANSLATION_RESULT, epoch=1, at=0.1, scan_id=2, items=[
+        RenderItem(
+            block_id=2,
+            text="khối thứ hai",
+            rect=Rect(100, 146, 200, 20),
+            source_text="second block",
+            cached=False,
+            line_px=20,
+        )
+    ]))
+    overlay._drain()
+    second = overlay._layouts[0]
+    assert (second.font_px, len(second.lines)) == (first.font_px, len(first.lines)), (
+        "block A re-wrapped because block B was translated"
+    )
+    overlay.close()
+
+def test_a_one_pixel_line_height_wobble_does_not_change_the_font(qapp):
+    """A static caption must not change font size because OCR moved by 1 px."""
+    from ocrtrans.pipeline import BlockView, EventKind, PipelineEvent
+
+    events = queue.Queue()
+    overlay = OverlayWindow(Rect(0, 0, 800, 600), Config(), events)
+    overlay.set_regions([Rect(80, 80, 240, 300)])
+
+    fonts = []
+    for scan, line_px in enumerate((20, 21, 20, 22, 19, 20), start=1):
+        events.put(
+            PipelineEvent(
+                kind=EventKind.OCR_RESULT,
+                epoch=1,
+                at=float(scan),
+                scan_id=scan,
+                blocks=[BlockView(1, Rect(100, 100, 200, 40), "Hello world", "stable", line_px)],
+            )
+        )
+        events.put(
+            PipelineEvent(
+                kind=EventKind.TRANSLATION_RESULT,
+                epoch=1,
+                at=float(scan),
+                scan_id=scan,
+                items=[
+                    RenderItem(
+                        block_id=1,
+                        text="Xin chào thế giới",
+                        rect=Rect(100, 100, 200, 40),
+                        source_text="Hello world",
+                        cached=False,
+                        line_px=line_px,
+                    )
+                ],
+            )
+        )
+        overlay._drain()
+        fonts.append(overlay._layouts[0].font_px)
+    assert len(set(fonts)) == 1, f"the font jumped around with line-height jitter: {fonts}"
+    overlay.close()
